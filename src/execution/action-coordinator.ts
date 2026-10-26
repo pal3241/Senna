@@ -11,6 +11,24 @@ export type ActionResource =
 
 export type ActionStatus =
   "queued" | "running" | "succeeded" | "failed" | "cancelled";
+export type ActionCleanupReason =
+  "success" | "failure" | "cancelled" | "timeout";
+
+export interface ActionFailureOutcome {
+  cleanup: "completed" | "failed";
+  actionLaneReleased: true;
+}
+
+const failureOutcomes = new WeakMap<object, ActionFailureOutcome>();
+
+export function getActionFailureOutcome(
+  error: unknown,
+): ActionFailureOutcome | null {
+  return error !== null &&
+    (typeof error === "object" || typeof error === "function")
+    ? (failureOutcomes.get(error) ?? null)
+    : null;
+}
 
 export interface ActionDefinition<T> {
   taskId: string;
@@ -23,7 +41,7 @@ export interface ActionDefinition<T> {
   precondition(): boolean | Promise<boolean>;
   run(signal: AbortSignal): T | Promise<T>;
   verify(result: T): boolean | Promise<boolean>;
-  cleanup?(reason: "success" | "failure" | "cancelled"): void | Promise<void>;
+  cleanup?(reason: ActionCleanupReason): void | Promise<void>;
 }
 
 export interface ActionResult<T> {
@@ -285,10 +303,11 @@ export class ActionCoordinator {
     const startedAt = new Date().toISOString();
     let timeout: NodeJS.Timeout | undefined;
     let abortListener: (() => void) | undefined;
-    let cleanupReason: "success" | "failure" | "cancelled" = "failure";
+    let cleanupReason: ActionCleanupReason = "failure";
     let successfulResult: T | undefined;
     let completed = false;
     let failure: unknown;
+    let cleanupSucceeded = false;
     try {
       if (this.safeHalted)
         throw new ActionCancelledError(
@@ -351,9 +370,11 @@ export class ActionCoordinator {
       successfulResult = result;
       completed = true;
     } catch (error) {
-      cleanupReason = action.controller.signal.aborted
-        ? "cancelled"
-        : "failure";
+      cleanupReason = isTimeout(error, action.controller.signal)
+        ? "timeout"
+        : action.controller.signal.aborted
+          ? "cancelled"
+          : "failure";
       failure = error;
     } finally {
       if (timeout) clearTimeout(timeout);
@@ -366,6 +387,7 @@ export class ActionCoordinator {
           this.cleanupTimeoutMs,
           definition.kind,
         );
+        cleanupSucceeded = true;
       } catch (error) {
         const reason = redactText(
           `Action cleanup failed (${definition.kind}): ${error instanceof Error ? error.message : "unknown error"}`,
@@ -377,6 +399,7 @@ export class ActionCoordinator {
         }
       }
     }
+    if (this.active === action) this.active = null;
     if (completed) {
       action.resolve({
         actionId: action.id,
@@ -389,11 +412,27 @@ export class ActionCoordinator {
         verified: true,
       });
     } else {
+      if (
+        failure !== null &&
+        (typeof failure === "object" || typeof failure === "function")
+      ) {
+        failureOutcomes.set(failure, {
+          cleanup: cleanupSucceeded ? "completed" : "failed",
+          actionLaneReleased: true,
+        });
+      }
       action.reject(
         failure ?? new Error(`Action did not complete: ${definition.kind}`),
       );
     }
   }
+}
+
+function isTimeout(error: unknown, signal: AbortSignal): boolean {
+  return (
+    error instanceof ActionTimeoutError ||
+    signal.reason instanceof ActionTimeoutError
+  );
 }
 
 function validateDefinition<T>(

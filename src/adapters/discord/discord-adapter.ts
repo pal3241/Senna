@@ -355,13 +355,7 @@ export class DiscordAdapter {
         actions.setPaused(false);
         controls.setPaused(false);
         controls.setSafeHalt(null);
-        const connection = health.get().minecraft;
-        health.update({
-          mode:
-            connection === "spawned" || connection === "disabled"
-              ? "OFFLINE_AI"
-              : "DISCONNECTED_MINECRAFT",
-        });
+        health.refreshMode();
         return "Sena resumed. Interrupted tasks still require world-state reconciliation.";
       }
       case "stop": {

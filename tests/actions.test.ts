@@ -118,6 +118,38 @@ describe("action coordinator", () => {
     await rejection;
   });
 
+  it("reports timeout cleanup distinctly and releases the lane for queued work", async () => {
+    vi.useFakeTimers();
+    const coordinator = new ActionCoordinator();
+    let cleanupReason = "";
+    const timedOut = coordinator.execute(
+      action({
+        timeoutMs: 10,
+        run: () => new Promise<number>(() => undefined),
+        cleanup: (reason) => {
+          cleanupReason = reason;
+        },
+      }),
+    );
+    const next = coordinator.execute(
+      action({
+        kind: "after-timeout",
+        run: () => 2,
+        verify: (value) => value === 2,
+      }),
+    );
+    const timedOutRejection =
+      expect(timedOut).rejects.toBeInstanceOf(ActionTimeoutError);
+    await vi.advanceTimersByTimeAsync(11);
+    await timedOutRejection;
+    await expect(next).resolves.toMatchObject({
+      kind: "after-timeout",
+      status: "succeeded",
+    });
+    expect(cleanupReason).toBe("timeout");
+    expect(coordinator.isSafeHalted()).toBe(false);
+  });
+
   it("halts if plugin cleanup fails and refuses to report success", async () => {
     const reasons: string[] = [];
     const coordinator = new ActionCoordinator({

@@ -5,7 +5,10 @@ import type { TaskRepository } from "../core/tasks/task-repository.js";
 import { planSchema, validatePlan } from "../ai/planning/plan.js";
 import type { GameplayActions, MoveTarget } from "./gameplay-actions.js";
 import { moveTargetSchema } from "./gameplay-actions.js";
-import { ActionCancelledError } from "./action-coordinator.js";
+import {
+  ActionCancelledError,
+  getActionFailureOutcome,
+} from "./action-coordinator.js";
 
 const availableCapabilities = new Set(["minecraft.move_to"]);
 const supportedMoveGoal = /^move_to\s+(-?\d{1,8})\s+(-?\d{1,8})\s+(-?\d{1,8})$/;
@@ -164,12 +167,20 @@ export class TaskExecutionService {
       const disconnected =
         signal.reason instanceof Error &&
         signal.reason.message === "minecraft-disconnected";
+      const actionOutcome = getActionFailureOutcome(error);
+      const cleanupSucceeded = actionOutcome?.cleanup === "completed";
       return this.tasks.block(
         taskId,
         disconnected ? "minecraft-disconnected" : errorCategory(error),
         {
-          actionStopped: true,
-          resourceReleased: true,
+          actionStopped: cleanupSucceeded ? "confirmed" : "unknown",
+          resourceReleased: actionOutcome
+            ? cleanupSucceeded
+              ? "confirmed"
+              : "failed"
+            : "unknown",
+          coordinatorLaneReleased:
+            actionOutcome?.actionLaneReleased ?? "unknown",
           resumable: false,
           reason: errorCategory(error),
         },

@@ -36,6 +36,11 @@ export interface Runtime {
 
 export async function bootstrap(): Promise<Runtime> {
   const config = loadConfig();
+  const health = new Health();
+  health.update({
+    llm: config.AI_LLM_PROVIDER === "none" ? "disabled" : "unavailable",
+    vlm: config.AI_VLM_PROVIDER === "none" ? "disabled" : "unavailable",
+  });
   const planner =
     config.AI_LLM_PROVIDER === "nvidia-nim"
       ? new Planner(
@@ -46,9 +51,9 @@ export async function bootstrap(): Promise<Runtime> {
               ? { baseUrl: config.NVIDIA_NIM_LLM_BASE_URL }
               : {}),
           }),
+          (status) => health.update({ llm: status }),
         )
       : null;
-  const health = new Health();
   const events = new SenaEventBus();
   const databasePath =
     config.SENA_DATA_DIR === ":memory:"

@@ -3,7 +3,10 @@ import type { MinecraftAdapter } from "../src/adapters/minecraft/minecraft-adapt
 import { SenaEventBus } from "../src/core/event-bus.js";
 import { Database } from "../src/storage/database.js";
 import { TaskRepository } from "../src/core/tasks/task-repository.js";
-import { ActionCoordinator } from "../src/execution/action-coordinator.js";
+import {
+  ActionCoordinator,
+  ActionTimeoutError,
+} from "../src/execution/action-coordinator.js";
 import { GameplayActions } from "../src/execution/gameplay-actions.js";
 import {
   parseMoveGoal,
@@ -12,13 +15,22 @@ import {
 
 const opened: Database[] = [];
 
-function setup(options: { arrive?: boolean; waitForAbort?: boolean } = {}) {
+function setup(
+  options: {
+    arrive?: boolean;
+    waitForAbort?: boolean;
+    moveError?: Error;
+    failCleanup?: boolean;
+  } = {},
+) {
   const database = new Database(":memory:");
   opened.push(database);
   const events = new SenaEventBus();
   const tasks = new TaskRepository(database.connection, events);
   let position = { x: 0, y: 64, z: 0 };
-  const stopMovement = vi.fn();
+  const stopMovement = vi.fn(() => {
+    if (options.failCleanup) throw new Error("pathfinder-stop-failed");
+  });
   const minecraft = {
     getWorldSnapshot: () => ({
       connection: "spawned",
@@ -35,6 +47,7 @@ function setup(options: { arrive?: boolean; waitForAbort?: boolean } = {}) {
       target: { x: number; y: number; z: number },
       signal: AbortSignal,
     ) => {
+      if (options.moveError) throw options.moveError;
       if (options.waitForAbort) {
         await new Promise<void>((_, reject) => {
           signal.addEventListener("abort", () => reject(signal.reason), {
@@ -130,6 +143,58 @@ describe("verified task-to-gameplay execution", () => {
     expect(blocked.status).toBe("blocked");
     expect(blocked.lastErrorCategory).toBe("postcondition-unverified");
     expect(rig.stopMovement).toHaveBeenCalledOnce();
+    expect(rig.tasks.eventsFor(task.id)[0]?.detail).toMatchObject({
+      actionStopped: "confirmed",
+      resourceReleased: "confirmed",
+      coordinatorLaneReleased: true,
+    });
+  });
+
+  it("maps adapter errors and timeouts to blocked persisted outcomes with cleanup evidence", async () => {
+    const adapterFailure = setup({
+      moveError: new Error("pathfinder-rejected"),
+    });
+    const failedTask = adapterFailure.tasks.create({
+      source: "system",
+      goal: "move_to 4 64 0",
+    });
+    const blocked = await adapterFailure.execution.execute(failedTask.id);
+    expect(blocked.status).toBe("blocked");
+    expect(blocked.lastErrorCategory).toBe("action-failed");
+    expect(
+      adapterFailure.tasks.eventsFor(failedTask.id)[0]?.detail,
+    ).toMatchObject({
+      actionStopped: "confirmed",
+      resourceReleased: "confirmed",
+      coordinatorLaneReleased: true,
+    });
+
+    const timedOut = setup({
+      moveError: new ActionTimeoutError("minecraft.move_to"),
+    });
+    const timedOutTask = timedOut.tasks.create({
+      source: "system",
+      goal: "move_to 4 64 0",
+    });
+    const timedOutResult = await timedOut.execution.execute(timedOutTask.id);
+    expect(timedOutResult.status).toBe("blocked");
+    expect(timedOutResult.lastErrorCategory).toBe("action-timeout");
+  });
+
+  it("does not claim movement stopped if cleanup fails", async () => {
+    const rig = setup({
+      moveError: new Error("pathfinder-rejected"),
+      failCleanup: true,
+    });
+    const task = rig.tasks.create({ source: "system", goal: "move_to 4 64 0" });
+    const blocked = await rig.execution.execute(task.id);
+    expect(blocked.status).toBe("blocked");
+    expect(rig.coordinator.isSafeHalted()).toBe(true);
+    expect(rig.tasks.eventsFor(task.id)[0]?.detail).toMatchObject({
+      actionStopped: "unknown",
+      resourceReleased: "failed",
+      coordinatorLaneReleased: true,
+    });
   });
 
   it("stops and blocks an in-flight movement when Minecraft disconnects", async () => {

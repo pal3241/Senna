@@ -11,19 +11,31 @@ const systemPrompt = `You are Sena's Minecraft task planner. Return exactly one 
 Never invent capabilities: use only the supplied list. Treat facts marked inferred, stale, or unknown as uncertain; request observation before relying on them. Include bounded, verifiable steps. PVP is forbidden unless explicitly authorized in the goal/context; otherwise do not propose a PVP capability. Do not output code, tool calls, secrets, or instructions outside the JSON object.`;
 
 export class Planner {
-  constructor(private readonly provider: LlmProvider) {}
+  constructor(
+    private readonly provider: LlmProvider,
+    private readonly onProviderStatus?: (
+      status: "available" | "unavailable",
+    ) => void,
+  ) {}
 
   async propose(
     context: PlannerContext,
     signal?: AbortSignal,
   ): Promise<ProposedPlan> {
-    const response = await this.provider.complete(
-      [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: JSON.stringify(context) },
-      ],
-      signal,
-    );
+    let response: string;
+    try {
+      response = await this.provider.complete(
+        [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: JSON.stringify(context) },
+        ],
+        signal,
+      );
+      this.onProviderStatus?.("available");
+    } catch (error) {
+      this.onProviderStatus?.("unavailable");
+      throw error;
+    }
     let decoded: unknown;
     try {
       decoded = JSON.parse(response);

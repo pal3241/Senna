@@ -8,6 +8,7 @@ export interface WorldFact<T> {
   status: FactStatus;
   source: "mineflayer";
   observedAt: string | null;
+  truncated?: boolean;
 }
 
 export interface BlockObservation {
@@ -64,26 +65,30 @@ export class WorldObserver {
     }
 
     const position = finitePosition(bot.entity.position);
-    const playerPosition = position ?? { x: 0, y: 0, z: 0 };
-    const entities = Object.values(bot.entities)
-      .filter((entity) => entity.position && finitePosition(entity.position))
-      .map((entity) => {
-        const entityPosition = finitePosition(entity.position)!;
-        return {
-          id: entity.id,
-          name: entity.username ?? entity.name ?? entity.type,
-          type: entity.type,
-          position: entityPosition,
-          distance: distance(playerPosition, entityPosition),
-          health: Number.isFinite(entity.health) ? entity.health! : null,
-        };
-      })
-      .filter((entity) => entity.distance <= 32)
-      .sort((a, b) => a.distance - b.distance)
-      .slice(0, 32);
+    const nearbyEntities = position
+      ? Object.values(bot.entities)
+          .filter(
+            (entity) => entity.position && finitePosition(entity.position),
+          )
+          .map((entity) => {
+            const entityPosition = finitePosition(entity.position)!;
+            return {
+              id: entity.id,
+              name: entity.username ?? entity.name ?? entity.type,
+              type: entity.type,
+              position: entityPosition,
+              distance: distance(position, entityPosition),
+              health: Number.isFinite(entity.health) ? entity.health! : null,
+            };
+          })
+          .filter((entity) => entity.distance <= 32)
+          .sort((a, b) => a.distance - b.distance)
+      : null;
 
-    const boundedBlockPositions = blockPositions.slice(0, 32);
-    const blocks = boundedBlockPositions.every(isFiniteIntegerPosition)
+    const blockRequestsValid =
+      blockPositions.length <= 32 && blockPositions.every(isValidBlockPosition);
+    const boundedBlockPositions = blockRequestsValid ? blockPositions : [];
+    const blocks = blockRequestsValid
       ? observeBlocks(bot, boundedBlockPositions)
       : null;
 
@@ -96,18 +101,7 @@ export class WorldObserver {
       health: fact(finiteNumber(bot.health), observedAt),
       food: fact(finiteNumber(bot.food), observedAt),
       oxygen: fact(finiteNumber(bot.oxygenLevel), observedAt),
-      inventory: fact(
-        bot.inventory
-          ? bot.inventory
-              .items()
-              .slice(0, 128)
-              .map((item) => ({
-                name: item.name,
-                count: item.count,
-              }))
-          : null,
-        observedAt,
-      ),
+      inventory: inventoryFact(bot, observedAt),
       equipment: fact(
         Array.isArray(bot.entity.equipment)
           ? bot.entity.equipment
@@ -118,11 +112,24 @@ export class WorldObserver {
           : null,
         observedAt,
       ),
-      entities: fact(entities, observedAt),
+      entities:
+        nearbyEntities === null
+          ? unknownFact()
+          : fact(
+              nearbyEntities.slice(0, 32),
+              observedAt,
+              nearbyEntities.length > 32,
+            ),
       blocks:
-        boundedBlockPositions.length === 0
+        blockPositions.length === 0
           ? fact([], observedAt)
-          : fact(blocks, observedAt),
+          : blockRequestsValid
+            ? fact<BlockObservation[]>(blocks, observedAt)
+            : fact<BlockObservation[]>(
+                null,
+                observedAt,
+                blockPositions.length > 32,
+              ),
     };
     this.previous = snapshot;
     return snapshot;
@@ -190,12 +197,20 @@ function nonEmptyString(value: string | undefined): string | null {
     : null;
 }
 
-function isFiniteIntegerPosition(point: {
+function isValidBlockPosition(point: {
   x: number;
   y: number;
   z: number;
 }): boolean {
-  return [point.x, point.y, point.z].every(Number.isSafeInteger);
+  return (
+    Number.isSafeInteger(point.x) &&
+    Number.isSafeInteger(point.y) &&
+    Number.isSafeInteger(point.z) &&
+    Math.abs(point.x) <= 30_000_000 &&
+    point.y >= -64 &&
+    point.y <= 320 &&
+    Math.abs(point.z) <= 30_000_000
+  );
 }
 
 function distance(
@@ -218,11 +233,30 @@ function observeBlocks(
   return observations;
 }
 
-function fact<T>(value: T | null, observedAt: string): WorldFact<T> {
+function inventoryFact(
+  bot: Bot,
+  observedAt: string,
+): WorldFact<Array<{ name: string; count: number }>> {
+  if (!bot.inventory)
+    return fact<Array<{ name: string; count: number }>>(null, observedAt);
+  const items = bot.inventory.items();
+  return fact(
+    items.slice(0, 128).map((item) => ({ name: item.name, count: item.count })),
+    observedAt,
+    items.length > 128,
+  );
+}
+
+function fact<T>(
+  value: T | null,
+  observedAt: string,
+  truncated = false,
+): WorldFact<T> {
   return {
     value,
     status: value === null ? "unknown" : "known",
     source: "mineflayer",
     observedAt: value === null ? null : observedAt,
+    truncated,
   };
 }

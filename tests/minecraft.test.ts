@@ -213,7 +213,16 @@ describe("Minecraft gameplay adapter", () => {
     const pending = adapter.moveTo({ x: 4, y: 64, z: 0 }, controller.signal);
     controller.abort(new Error("cancelled-test"));
     await expect(pending).rejects.toThrow("cancelled-test");
-    expect(bot.pathfinder.stop).toHaveBeenCalled();
+    expect(bot.pathfinder.stop).toHaveBeenCalledOnce();
+
+    const pathfinderError = new Error("pathfinder-rejected");
+    vi.mocked(bot.pathfinder.goto).mockRejectedValueOnce(pathfinderError);
+    await expect(
+      adapter.moveTo({ x: 5, y: 64, z: 0 }, new AbortController().signal),
+    ).rejects.toBe(pathfinderError);
+    expect(bot.pathfinder.stop).toHaveBeenCalledTimes(2);
+    await adapter.moveTo({ x: 6, y: 64, z: 0 }, new AbortController().signal);
+    expect(bot.pathfinder.goto).toHaveBeenCalledTimes(4);
     await adapter.stop();
   });
 });
@@ -274,5 +283,63 @@ describe("world observations", () => {
         health: 16,
       }),
     ]);
+  });
+
+  it("does not invent nearby entity distances when player position is invalid", () => {
+    const bot = fakeBot();
+    Object.assign(bot.entity, { position: { x: Number.NaN, y: 64, z: 0 } });
+    Object.assign(bot, {
+      entities: {
+        1: {
+          id: 1,
+          name: "near-origin-only",
+          type: "mob",
+          position: { x: 20, y: 0, z: 0 },
+        },
+      },
+    });
+
+    const snapshot = new WorldObserver(() => bot).snapshot();
+    expect(snapshot.position.status).toBe("unknown");
+    expect(snapshot.entities).toMatchObject({ status: "unknown", value: null });
+  });
+
+  it("bounds entity results and exposes when the nearest-entity list was truncated", () => {
+    const bot = fakeBot();
+    Object.assign(bot, {
+      entities: Object.fromEntries(
+        Array.from({ length: 40 }, (_, index) => [
+          index + 1,
+          {
+            id: index + 1,
+            name: `mob-${index + 1}`,
+            type: "mob",
+            position: { x: 2, y: 64, z: -2 + (index % 2) },
+          },
+        ]),
+      ),
+    });
+    const snapshot = new WorldObserver(() => bot).snapshot();
+    expect(snapshot.entities.value).toHaveLength(32);
+    expect(snapshot.entities.truncated).toBe(true);
+    expect(snapshot.entities.value?.[0]?.distance).toBe(1);
+  });
+
+  it("does not query invalid or oversized requested block positions", () => {
+    const bot = fakeBot();
+    const blockAt = vi.spyOn(bot, "blockAt");
+    const observer = new WorldObserver(() => bot);
+    const invalid = observer.snapshot([{ x: 30_000_001, y: 64, z: 0 }]);
+    const oversized = observer.snapshot(
+      Array.from({ length: 33 }, (_, x) => ({ x, y: 64, z: 0 })),
+    );
+
+    expect(invalid.blocks).toMatchObject({ status: "unknown", value: null });
+    expect(oversized.blocks).toMatchObject({
+      status: "unknown",
+      value: null,
+      truncated: true,
+    });
+    expect(blockAt).not.toHaveBeenCalled();
   });
 });
