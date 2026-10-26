@@ -242,7 +242,7 @@ If a Minecraft test server is available, run a separately labelled manual/integr
 - [x] Collection/tool integration was audited and is explicitly blocked with evidence; no dependency was installed.
 - [ ] `collect_block` is not implemented because the released plugin does not meet current movement-safety/cancellation requirements.
 - [x] Cancellation, timeout, disconnect, plugin errors, and restart recovery do not produce false completion in the tested task path.
-- [ ] `npm run check` result pending final run for this revision.
+- [x] `npm run check` passed: formatting, typecheck, lint, 51 tests across 13 files, and production build.
 - [x] Live integration results are distinguished from fake/unit tests; live Minecraft smoke test is `not tested`.
 - [x] README, compatibility audit, testing guide, and this phase report describe the same supported scope.
 - [x] No credentials, private server details, or secrets were added.
@@ -262,6 +262,8 @@ If a Minecraft test server is available, run a separately labelled manual/integr
 ### Completion report
 
 Implemented the P0/P1/P2 correctness repairs described above and added focused tests. The package audit found a version mismatch between npm-published releases and repository heads: npm publishes collectblock 1.6.0 and tool 1.2.0, while current repository metadata advertises unreleased 1.7.0 and 1.3.0. Both are MIT; their declared Mineflayer/Pathfinder ranges include the locked versions, but neither declares a Node engine. Collectblock's released source overrides two movement safety flags and its cancel operation stops pathfinding without proving an active `bot.dig()` has ceased; it is therefore not installed or exposed.
+
+Verification: `LD_LIBRARY_PATH=/data/data/com.termux/files/usr/lib npm run check` passed on 2026-10-26: Prettier formatting, TypeScript typecheck, ESLint, all 51 tests across 13 files, and production build.
 
 The implementation is tested with fakes only. No live Minecraft server, Discord account, or NVIDIA credentials were used. The next smallest task is to define or upstream a collection cancellation contract that interrupts/awaits digging and preserves caller-supplied safe movement settings; only then should the exact released plugin be integrated and a disposable-server smoke test run.
 
