@@ -92,6 +92,39 @@ Required repair:
 - preserve original observation timestamps when a fact becomes stale;
 - test maximum entity/block bounds and missing chunk data.
 
+### P1 — Runtime mode can misreport AI availability
+
+File: `src/adapters/minecraft/minecraft-adapter.ts`
+
+The Minecraft connection callback sets runtime mode to `OFFLINE_AI` whenever the Minecraft connection spawns, even though LLM availability is tracked independently in `HealthSnapshot.llm`. This can make health reporting claim AI is offline based only on a Minecraft state transition.
+
+Required repair:
+- make runtime mode reflect provider and connection health together;
+- prevent the Minecraft adapter from overwriting unrelated health dimensions;
+- add tests for spawned + LLM available, spawned + LLM unavailable, and disconnected Minecraft.
+
+### P1 — Persisted failure details can claim cleanup without evidence
+
+File: `src/execution/task-execution-service.ts`
+
+The generic error path persists `actionStopped: true` and `resourceReleased: true` for any thrown action error. A failed cleanup callback or adapter-level failure can make these claims inaccurate.
+
+Required repair:
+- persist cleanup state only when the coordinator/adapter reports it;
+- otherwise use an explicit unknown/failed value and preserve the reason code;
+- test cleanup failure and ensure it cannot produce a success-shaped task result.
+
+### P1 — Timeout cleanup is classified as cancellation
+
+File: `src/execution/action-coordinator.ts`
+
+The timeout handler aborts the action controller with an `ActionTimeoutError`, but the catch path chooses cleanup reason `cancelled` whenever the controller is aborted. This loses the distinction between a timeout and an operator/task cancellation.
+
+Required repair:
+- preserve the original terminal cause through cleanup and task reporting;
+- distinguish timeout from cancellation in logs, reason codes, and tests;
+- prove timeout still stops movement and permits the next queued action after cleanup.
+
 ### P2 — Module trust is not a process sandbox
 
 File: `docs/MODULES.md`
