@@ -1,7 +1,8 @@
 # Next Implementation Phase: Verified Gameplay Execution
 
-Status: planned  
-Target: next coding-agent task  
+Status: implemented; fake-tested; live-server verification pending
+
+Target: next coding-agent task
 Repository: `pal3241/Senna`  
 Source of truth: `SENA_AGENT_SPEC.txt`, current source code, and `docs/COMPATIBILITY.md`
 
@@ -44,6 +45,7 @@ At minimum, where the bot and world make the information available, represent:
 For every observation that can become stale, include timestamp/freshness or an equivalent explicit status. Distinguish `known`, `stale`, and `unknown`; do not turn missing/unloaded chunks or absent API values into a false claim that an object does not exist. Keep snapshots bounded in size and avoid passing the entire world/chat history to an LLM.
 
 Acceptance:
+
 - Unit tests cover disconnected/unspawned state, missing values, fresh observations, stale observations, and inventory/entity/block normalization.
 - Observer tests use fakes/fixtures and never pretend to be a live-server test.
 - The observer does not mutate the world or issue gameplay actions.
@@ -63,6 +65,7 @@ Each action must declare, as appropriate:
 - structured failure reason and evidence used to verify completion.
 
 Requirements:
+
 - Conflicting actions cannot own the same exclusive resource simultaneously.
 - A cancelled, timed-out, failed, or completed action releases locks and stops the plugin behavior it started where the API supports it.
 - Errors propagate as structured failures; never catch and silently convert errors into success.
@@ -71,6 +74,7 @@ Requirements:
 - LLM output is untrusted input: validate schema, action allowlist, arguments, resource bounds, and preconditions before execution.
 
 Acceptance:
+
 - Tests prove two conflicting actions cannot overlap.
 - Tests cover cancellation, timeout, thrown plugin errors, lock release, cleanup, and bounded retry.
 - Tests prove invalid/unknown action types are rejected.
@@ -80,6 +84,7 @@ Acceptance:
 Implement only the minimum safe actions needed for one end-to-end vertical slice. Prefer existing Mineflayer APIs and audited plugins over custom pathfinding/mining algorithms.
 
 Recommended initial action set:
+
 1. `observe_status`: read current structured state; no mutation.
 2. `move_to`: navigate to a validated finite position using the loaded pathfinder when available.
 3. `collect_block`: collect a specified block type within an explicit bounded search radius using the audited collectblock plugin only after compatibility verification.
@@ -88,6 +93,7 @@ Recommended initial action set:
 If collectblock has not yet been audited/installed, do not invent its API or claim collection is supported. In that case, implement and fully test the status + movement vertical slice first, and document collection as blocked pending plugin audit. Keep action handlers behind the coordinator and a narrow Minecraft adapter interface. No handler or module should receive unrestricted raw bot access unless the existing architecture explicitly requires it and its risk is documented.
 
 For every handler:
+
 - validate arguments and bounds before touching the bot;
 - check connection, spawn, required world state, and safety preconditions;
 - use an explicit timeout and cancellation path;
@@ -106,6 +112,7 @@ Connect existing task persistence, validated planning output, action coordinator
 Choose one testable goal, such as navigating to a nearby safe coordinate, for the first complete slice. Add block collection only if its plugin/API passes the compatibility audit and the slice remains bounded.
 
 Requirements:
+
 - Persist task state before execution and checkpoint only verified progress.
 - After restart/reconnect, re-observe and reconcile before continuing; never blindly replay a movement/mining action.
 - If Minecraft disconnects, stop active world actions and mark the task recoverable/blocked; do not report completion.
@@ -118,6 +125,7 @@ Requirements:
 Use the existing structured logger and task/alert systems. Include task/action correlation IDs and concise reason codes. Redact credentials and private data.
 
 A failure report should tell the operator:
+
 - what task/action was attempted;
 - which precondition or verification failed;
 - whether the action was stopped and resources released;
@@ -173,16 +181,22 @@ Do not add packages until the compatibility audit explains the package, version,
 
 This phase is complete only when all applicable items are true:
 
-- [ ] Existing architecture and relevant code were audited before changes.
-- [ ] World observations have typed, bounded, freshness-aware state.
-- [ ] Every gameplay action uses the existing single-lane coordinator.
-- [ ] At least one bounded gameplay action is implemented against the real Mineflayer adapter, not only a mock.
-- [ ] Task lifecycle connects persistence, action execution, verification, and checkpoint/recovery.
-- [ ] Cancellation, timeout, disconnection, and errors stop safely and never produce false success.
-- [ ] Automated tests cover the cases in Section 4.
-- [ ] `npm run check` passes, or exact environmental blockers are documented.
-- [ ] README/docs accurately distinguish implemented, tested, blocked, and not-tested behavior.
-- [ ] No secrets, server credentials, or private runtime data are committed.
+- [x] Existing architecture and relevant code were audited before changes.
+- [x] World observations have typed, bounded, freshness-aware state.
+- [x] The implemented gameplay action uses the existing single-lane coordinator.
+- [x] Bounded movement is implemented against the real Mineflayer adapter, not only a mock.
+- [x] Task lifecycle connects persistence, action execution, verification, checkpointing, and restart reconciliation. Interrupted tasks are not automatically resumed.
+- [x] Cancellation, disconnection, and postcondition failures stop safely and never produce false success. Timeout and adapter-error cleanup are covered by coordinator/action tests.
+- [ ] All tests listed in Section 4 are covered. Remaining focused gap: an explicit throwing-pathfinder adapter test; existing suites cover coordinator timeout/cleanup, offline startup/shutdown, planner/provider-unavailable behavior, and task restart recovery.
+- [x] `npm run check` passes (format, typecheck, lint, 42 tests across 12 files, build).
+- [x] README/docs distinguish implemented, fake-tested, blocked, and not-tested behavior.
+- [x] No secrets, server credentials, or private runtime data were added.
+
+### Implementation report
+
+The vertical slice supports only deterministic `move_to <x> <y> <z>` goals. It requires a spawned connection, a known position, an available pathfinder, integer world-bounded coordinates, and a target within 48 blocks. Navigation uses the shared `ActionCoordinator`; safe movement settings disable digging, parkour, tower building, sprinting, scaffolding, and drops over one block. A task is marked successful only after a new world snapshot places the player within 1.75 blocks of the target. Unsupported goals, disconnections, cancellation, and unverified movement do not produce success. Active work is stopped on shutdown and awaited before the database closes; after restart, active tasks remain interrupted for explicit reconciliation.
+
+The observer provides bounded, freshness-aware player, inventory, equipment, entity, and explicitly requested block observations. Unloaded blocks and unavailable values remain unknown. Collection remains blocked pending a separate plugin compatibility audit. Tests use deterministic fakes; no live Minecraft server was available, so live navigation is not tested. The implementation does not execute free-form LLM plans.
 
 ## 8. Required agent completion report
 

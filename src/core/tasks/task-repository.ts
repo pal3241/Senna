@@ -21,7 +21,7 @@ const transitions: Record<TaskStatus, ReadonlySet<TaskStatus>> = {
     "cancelled",
     "interrupted",
   ]),
-  ready: new Set(["running", "paused", "cancelled", "interrupted"]),
+  ready: new Set(["running", "blocked", "paused", "cancelled", "interrupted"]),
   running: new Set([
     "waiting",
     "succeeded",
@@ -236,6 +236,71 @@ export class TaskRepository {
         phase: safePhase,
       });
     });
+    return this.get(id)!;
+  }
+
+  complete(
+    id: string,
+    phase: string,
+    checkpoint: Record<string, unknown>,
+    verification: Record<string, unknown>,
+  ): Task {
+    const current = this.require(id);
+    if (!transitions[current.status].has("succeeded")) {
+      throw new InvalidTaskTransitionError(current.status, "succeeded");
+    }
+    const checkpointJson = redactText(JSON.stringify(checkpoint));
+    const verificationJson = redactText(JSON.stringify(verification));
+    if (checkpointJson.length > 32_000 || verificationJson.length > 32_000) {
+      throw new Error("Task completion evidence exceeds 32 KB");
+    }
+    const safePhase = phase.slice(0, 128);
+    this.transaction(() => {
+      const now = new Date().toISOString();
+      this.db
+        .prepare(
+          `UPDATE tasks SET status = ?, updated_at = ?, phase = ?,
+        checkpoint_json = ?, verification_json = ?, last_error_category = NULL,
+        cancel_requested = 0 WHERE id = ?`,
+        )
+        .run("succeeded", now, safePhase, checkpointJson, verificationJson, id);
+      this.recordEvent(id, current.status, "succeeded", "verified-completion", {
+        phase: safePhase,
+        verification: JSON.parse(verificationJson) as Record<string, unknown>,
+      });
+    });
+    this.events.emit("task.changed", { taskId: id, status: "succeeded" });
+    return this.get(id)!;
+  }
+
+  block(
+    id: string,
+    category: string,
+    detail: Record<string, unknown> = {},
+  ): Task {
+    const current = this.require(id);
+    if (!transitions[current.status].has("blocked")) {
+      throw new InvalidTaskTransitionError(current.status, "blocked");
+    }
+    const safeCategory = category.replace(/[^a-z0-9._-]/gi, "-").slice(0, 128);
+    this.transaction(() => {
+      const now = new Date().toISOString();
+      this.updateTask.run(
+        "blocked",
+        now,
+        current.retryCount,
+        current.phase,
+        current.verification ? JSON.stringify(current.verification) : null,
+        safeCategory,
+        current.cancelRequested ? 1 : 0,
+        id,
+      );
+      this.recordEvent(id, current.status, "blocked", "task-blocked", {
+        ...detail,
+        category: safeCategory,
+      });
+    });
+    this.events.emit("task.changed", { taskId: id, status: "blocked" });
     return this.get(id)!;
   }
 

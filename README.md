@@ -1,10 +1,10 @@
 # Sena
 
-Sena is a safety-first autonomous Minecraft Java agent, with Discord as its planned control plane. The repository is being implemented in the phases defined by `SENA_AGENT_SPEC.txt`.
+Sena is a safety-first Minecraft Java agent with an optional Discord control plane. The repository is being implemented in the phases defined by `SENA_AGENT_SPEC.txt`.
 
 ## Current status
 
-The current runtime includes strict configuration, redacted logging, persistent tasks and alerts, restart reconciliation, trusted module loading, a Mineflayer connector with pathfinder, structured world observations, a single-lane action coordinator, an authorized Discord slash-command adapter, and an NVIDIA NIM LLM client with a validated planning boundary. Connector behavior, command authorization, and planner/provider behavior have automated tests; live Minecraft, Discord, and NVIDIA connections have not been tested. Plans are proposals only: gameplay execution, memory/learning, VLM, and gameplay action handlers remain unimplemented. See `docs/COMPATIBILITY.md` for exact versions and remaining integration work.
+The current runtime includes strict configuration, redacted logging, persistent tasks and alerts, restart reconciliation, trusted module loading, a Mineflayer connector with pathfinder, bounded freshness-aware world observations, a single-lane action coordinator, and an authorized Discord slash-command adapter. One deterministic gameplay path is implemented end-to-end: an authorized task using `move_to <x> <y> <z>` is persisted, range-checked, navigated with conservative pathfinder settings, and completed only after a fresh position observation verifies arrival. Unsupported goals are blocked; arbitrary LLM-generated goals are not executed. Automated tests use fakes; live Minecraft, Discord, and NVIDIA connections have not been tested. Collection, combat, memory/learning, and VLM remain unimplemented. See `docs/PHASE_NEXT_GAMEPLAY_EXECUTION.md` for phase results and `docs/COMPATIBILITY.md` for integration status.
 
 ## Requirements and commands
 

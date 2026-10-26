@@ -13,6 +13,8 @@ import { discoverModules } from "../core/modules/discovery.js";
 import { ModuleHost } from "../core/modules/module-host.js";
 import { TaskRepository } from "../core/tasks/task-repository.js";
 import { ActionCoordinator } from "../execution/action-coordinator.js";
+import { GameplayActions } from "../execution/gameplay-actions.js";
+import { TaskExecutionService } from "../execution/task-execution-service.js";
 import { Database } from "../storage/database.js";
 import { join, resolve } from "node:path";
 
@@ -23,6 +25,8 @@ export interface Runtime {
   readonly modules: ModuleHost;
   readonly minecraft: MinecraftAdapter;
   readonly actions: ActionCoordinator;
+  readonly gameplay: GameplayActions;
+  readonly taskExecution: TaskExecutionService;
   readonly controls: RuntimeControls;
   readonly discord: DiscordAdapter;
   readonly planner: Planner | null;
@@ -67,6 +71,13 @@ export async function bootstrap(): Promise<Runtime> {
       events.emit("runtime.safe-halt", { reason });
     },
   });
+  const gameplay = new GameplayActions(actions, minecraft);
+  const taskExecution = new TaskExecutionService(
+    tasks,
+    minecraft,
+    gameplay,
+    events,
+  );
   const discord = new DiscordAdapter({
     config,
     events,
@@ -77,6 +88,7 @@ export async function bootstrap(): Promise<Runtime> {
     modules,
     actions,
     minecraft,
+    taskExecution,
   });
   const runtime: Runtime = {
     health,
@@ -85,6 +97,8 @@ export async function bootstrap(): Promise<Runtime> {
     modules,
     minecraft,
     actions,
+    gameplay,
+    taskExecution,
     controls,
     discord,
     planner,
@@ -141,6 +155,7 @@ export async function bootstrap(): Promise<Runtime> {
       health.update({ lifecycle: "stopping" });
       logger.info({ signal }, "Sena is shutting down");
       await actions.stop();
+      await taskExecution.close();
       await modules.stopAll();
       await minecraft.stop();
       await discord.stop();

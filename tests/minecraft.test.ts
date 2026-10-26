@@ -4,6 +4,10 @@ import type { Bot } from "mineflayer";
 import { ConnectionManager } from "../src/adapters/minecraft/connection-manager.js";
 import { PluginRegistry } from "../src/adapters/minecraft/plugin-registry.js";
 import { WorldObserver } from "../src/adapters/minecraft/world-observer.js";
+import { MinecraftAdapter } from "../src/adapters/minecraft/minecraft-adapter.js";
+import { configSchema } from "../src/core/config.js";
+import { Health } from "../src/core/health.js";
+import { SenaEventBus } from "../src/core/event-bus.js";
 import { logger } from "../src/core/logger.js";
 
 function fakeBot(): Bot {
@@ -11,7 +15,11 @@ function fakeBot(): Bot {
   return Object.assign(emitter, {
     hasPlugin: () => false,
     loadPlugin: () => undefined,
-    pathfinder: { stop: vi.fn() },
+    pathfinder: {
+      stop: vi.fn(),
+      goto: vi.fn(async () => undefined),
+      setMovements: vi.fn(),
+    },
     quit: vi.fn(),
     health: 18,
     food: 16,
@@ -21,6 +29,7 @@ function fakeBot(): Bot {
     inventory: {
       items: () => [{ name: "oak_log", count: 2 }],
     },
+    blockAt: () => null,
     entities: {},
   }) as unknown as Bot;
 }
@@ -168,10 +177,51 @@ describe("Mineflayer connector", () => {
   });
 });
 
+describe("Minecraft gameplay adapter", () => {
+  it("navigates with the loaded Mineflayer pathfinder and stops on cancellation", async () => {
+    const bot = fakeBot();
+    const movementPolicy = {
+      canDig: false,
+      allowParkour: false,
+      allow1by1towers: false,
+      allowSprinting: false,
+      maxDropDown: 1,
+      scafoldingBlocks: [],
+    };
+    const config = configSchema.parse({
+      SENA_MODE: "online",
+      MINECRAFT_HOST: "localhost",
+      MINECRAFT_USERNAME: "SenaTest",
+    });
+    const adapter = new MinecraftAdapter(
+      config,
+      new Health(),
+      new SenaEventBus(),
+      () => bot,
+      () => movementPolicy as never,
+    );
+    adapter.start();
+    bot.emit("spawn");
+    expect(adapter.isMovementReady()).toBe(true);
+    await adapter.moveTo({ x: 3, y: 64, z: 0 }, new AbortController().signal);
+    expect(bot.pathfinder.goto).toHaveBeenCalledOnce();
+    expect(bot.pathfinder.setMovements).toHaveBeenCalledWith(movementPolicy);
+    vi.mocked(bot.pathfinder.goto).mockImplementationOnce(
+      () => new Promise<void>(() => undefined),
+    );
+    const controller = new AbortController();
+    const pending = adapter.moveTo({ x: 4, y: 64, z: 0 }, controller.signal);
+    controller.abort(new Error("cancelled-test"));
+    await expect(pending).rejects.toThrow("cancelled-test");
+    expect(bot.pathfinder.stop).toHaveBeenCalled();
+    await adapter.stop();
+  });
+});
+
 describe("world observations", () => {
   it("keeps disconnected fields unknown and stamps live data", () => {
     const missing = new WorldObserver(() => null).snapshot();
-    expect(missing.connection).toBe("unknown");
+    expect(missing.connection).toBe("disconnected");
     expect(missing.position.status).toBe("unknown");
 
     const live = new WorldObserver(fakeBot).snapshot();
@@ -181,5 +231,48 @@ describe("world observations", () => {
       source: "mineflayer",
     });
     expect(live.inventory.value).toEqual([{ name: "oak_log", count: 2 }]);
+  });
+
+  it("marks cached facts stale after disconnect and keeps unavailable block data unknown", () => {
+    let connected: Bot | null = fakeBot();
+    const observer = new WorldObserver(() => connected);
+    const fresh = observer.snapshot([{ x: 1, y: 64, z: -2 }]);
+    expect(fresh.position.status).toBe("known");
+    expect(fresh.blocks.status).toBe("unknown");
+    connected = null;
+    const stale = observer.snapshot();
+    expect(stale.connection).toBe("disconnected");
+    expect(stale.position.status).toBe("stale");
+    expect(stale.position.observedAt).toBe(fresh.position.observedAt);
+  });
+
+  it("bounds and normalizes nearby entity observations", () => {
+    const bot = fakeBot();
+    Object.assign(bot, {
+      entities: {
+        1: {
+          id: 1,
+          name: "zombie",
+          type: "mob",
+          position: { x: 4, y: 64, z: -2 },
+          health: 16,
+        },
+        2: {
+          id: 2,
+          name: "distant",
+          type: "mob",
+          position: { x: 100, y: 64, z: 0 },
+        },
+      },
+    });
+    const snapshot = new WorldObserver(() => bot).snapshot();
+    expect(snapshot.entities.value).toEqual([
+      expect.objectContaining({
+        id: 1,
+        name: "zombie",
+        distance: 3,
+        health: 16,
+      }),
+    ]);
   });
 });

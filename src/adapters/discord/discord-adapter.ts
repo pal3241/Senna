@@ -17,6 +17,7 @@ import type { TaskRepository } from "../../core/tasks/task-repository.js";
 import type { ModuleHost } from "../../core/modules/module-host.js";
 import type { ActionCoordinator } from "../../execution/action-coordinator.js";
 import type { MinecraftAdapter } from "../minecraft/minecraft-adapter.js";
+import type { TaskExecutionService } from "../../execution/task-execution-service.js";
 import { senaCommand } from "./commands.js";
 import { isAuthorized } from "./interaction-authorization.js";
 
@@ -30,6 +31,7 @@ export interface DiscordDependencies {
   modules: ModuleHost;
   actions: ActionCoordinator;
   minecraft: MinecraftAdapter;
+  taskExecution: TaskExecutionService;
 }
 
 const responseLimit = 1800;
@@ -268,8 +270,16 @@ export class DiscordAdapter {
   private async route(
     interaction: ChatInputCommandInteraction,
   ): Promise<string> {
-    const { health, tasks, modules, minecraft, actions, controls, config } =
-      this.dependencies;
+    const {
+      health,
+      tasks,
+      modules,
+      minecraft,
+      actions,
+      controls,
+      config,
+      taskExecution,
+    } = this.dependencies;
     const subcommand = interaction.options.getSubcommand();
     switch (subcommand) {
       case "status": {
@@ -290,12 +300,14 @@ export class DiscordAdapter {
           .trim();
         if (!objective || objective.length > 2000)
           return "Objective must contain 1–2000 characters.";
-        const task = tasks.create({
+        const task = taskExecution.submit({
           source: "discord",
           ownerId: interaction.user.id,
           goal: objective,
+          maxRetries: 0,
+          requiredCapabilities: ["minecraft.move_to"],
         });
-        return `Queued task ${task.id} (priority ${task.priority}). Task execution is not enabled yet.`;
+        return `Accepted task ${task.id}. Supported goal format: move_to <x> <y> <z> (integer coordinates within 48 blocks). Unsupported or unsafe goals will be marked blocked.`;
       }
       case "tasks": {
         const recent = tasks.list(undefined, 10);
@@ -311,9 +323,10 @@ export class DiscordAdapter {
         if (["succeeded", "failed", "cancelled"].includes(task.status)) {
           return `Task is already ${task.status}.`;
         }
-        if (task.status === "running")
-          await actions.cancelTaskAndWait(task.id, "Cancelled from Discord");
-        const cancelled = tasks.requestCancellation(task.id);
+        const cancelled = await taskExecution.cancel(
+          task.id,
+          "cancelled-from-discord",
+        );
         return `Task ${cancelled.id} is ${cancelled.status}.`;
       }
       case "pause": {

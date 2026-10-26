@@ -14,17 +14,17 @@ All commands are ephemeral and require an authorized owner or admin role in an a
 
 ## Commands
 
-| Command                                         | Current behavior                                                                                        |
-| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `/sena status`                                  | Runtime mode, component health, queued task count, active action, pause state, and loaded module count. |
-| `/sena task objective:`                         | Persists a bounded task from the authorized Discord user. Task execution is not implemented yet.        |
-| `/sena tasks`                                   | Lists up to ten recent tasks.                                                                           |
-| `/sena cancel task_id:`                         | Cancels the task and waits for its active action cleanup when one is running.                           |
-| `/sena pause`                                   | Persists pause state, cancels active actions, then pauses queued/in-progress tasks.                     |
-| `/sena resume`                                  | Clears pause/safe halt when no action is cleaning up. Interrupted tasks still require reconciliation.   |
-| `/sena stop`                                    | Cancels actions, waits for cleanup, persists `SAFE_HALT`, and marks active tasks interrupted.           |
-| `/sena inventory`, `/sena inspect`              | Shows current Mineflayer observations or clearly reports unknown state.                                 |
-| `/sena modules`, `/sena health`, `/sena config` | Shows loaded modules, runtime health, or an allowlisted non-secret config summary.                      |
-| `/sena memory`, `/sena learning`                | Reports unavailable until those subsystems are implemented.                                             |
+| Command                                         | Current behavior                                                                                                                                                                        |
+| ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/sena status`                                  | Runtime mode, component health, queued task count, active action, pause state, and loaded module count.                                                                                 |
+| `/sena task objective:`                         | Persists and submits the task. Only `move_to <x> <y> <z>` is currently supported; coordinates must be integers and the target must be within 48 blocks. Other goals are safely blocked. |
+| `/sena tasks`                                   | Lists up to ten recent tasks.                                                                                                                                                           |
+| `/sena cancel task_id:`                         | Cancels the task through the execution service and waits for active movement cleanup.                                                                                                   |
+| `/sena pause`                                   | Persists pause state, cancels active actions, then pauses queued/in-progress tasks.                                                                                                     |
+| `/sena resume`                                  | Clears pause/safe halt when no action is cleaning up. Interrupted tasks still require reconciliation.                                                                                   |
+| `/sena stop`                                    | Cancels actions, waits for cleanup, persists `SAFE_HALT`, and marks active tasks interrupted.                                                                                           |
+| `/sena inventory`, `/sena inspect`              | Shows current Mineflayer observations or clearly reports unknown state.                                                                                                                 |
+| `/sena modules`, `/sena health`, `/sena config` | Shows loaded modules, runtime health, or an allowlisted non-secret config summary.                                                                                                      |
+| `/sena memory`, `/sena learning`                | Reports unavailable until those subsystems are implemented.                                                                                                                             |
 
 Important events use the SQLite notification outbox with deduplication and a 24-hour TTL. Discord disconnects do not stop task persistence, Minecraft connection handling, or the core process.
