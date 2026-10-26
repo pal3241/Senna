@@ -1,0 +1,1061 @@
+SENA AUTONOMOUS MINECRAFT AGENT
+MASTER IMPLEMENTATION SPECIFICATION FOR A CODING AGENT
+Version: 1.0
+Date: 2026-10-26
+Language: Indonesian project specification; code, identifiers, logs, and comments may use English.
+
+======================================================================
+0. INSTRUKSI UTAMA UNTUK CODING AGENT
+======================================================================
+
+Anda bertugas MEMBANGUN proyek Sena DARI NOL, bukan hanya memberi saran, pseudo-code, daftar file, atau contoh terpisah. Mulai dari direktori proyek kosong dan hasilkan aplikasi yang dapat dijalankan, diuji, dikonfigurasi, serta didokumentasikan.
+
+Aturan kerja:
+1. Periksa direktori kerja sebelum mengubah apa pun. Jika bukan direktori proyek baru, jangan menimpa atau menghapus file yang tidak berkaitan. Buat folder proyek Sena khusus.
+2. Implementasikan bertahap dari fondasi ke fitur lanjutan. Jangan membuat satu kumpulan file besar yang tidak terintegrasi.
+3. Setelah setiap tahap, jalankan typecheck, lint, unit test, dan build yang sesuai. Perbaiki error sebelum maju.
+4. Jangan menulis placeholder palsu seperti TODO untuk jalur utama, fungsi kosong yang dilaporkan sukses, data mock yang digunakan seolah-olah data Minecraft nyata, atau try/catch yang menelan kesalahan tanpa laporan.
+5. Jika suatu API atau paket belum jelas, periksa dokumentasi resmi, repository aktif, package metadata, contoh, dan versi yang kompatibel sebelum mengimplementasikannya. Catat hasil verifikasi dan tanggal pemeriksaan dalam docs/COMPATIBILITY.md.
+6. Jangan mengarang API plugin. Jika plugin yang diminta tidak kompatibel, tidak terawat, atau API-nya berbeda, buat adapter yang benar berdasarkan sumber aktual atau dokumentasikan blocker dan pilihan alternatif secara eksplisit. Jangan mengganti paket diam-diam.
+7. Jangan menganggap implementasi selesai hanya karena kode ditulis. Gunakan tes otomatis. Untuk integrasi yang memerlukan server Minecraft/Discord/NVIDIA API, jelaskan mana yang telah diuji nyata dan mana yang masih memerlukan kredensial atau server.
+8. Jangan meminta pengguna membuat arsitektur lagi. Gunakan spesifikasi ini sebagai source of truth. Buat asumsi default yang aman, catat asumsi itu, dan teruskan implementasi.
+9. Jangan menampilkan token, API key, password server, isi rahasia environment, atau kredensial ke terminal/log/Discord, termasuk saat terjadi exception.
+10. Jangan mengirim atau melakukan tindakan eksternal tanpa kebutuhan teknis. Jangan membuat repository publik, mengunggah kode, mempublikasikan bot, atau melakukan deploy tanpa instruksi eksplisit dari pemilik.
+11. Selesaikan setiap fase dengan ringkasan file, tes yang dijalankan, hasil tes sebenarnya, masalah yang tersisa, dan perintah untuk melanjutkan.
+12. Tujuan akhir adalah aplikasi yang bekerja. Dokumentasi dan checklist tidak boleh menggantikan implementasi nyata.
+
+======================================================================
+1. VISI DAN DEFINISI PRODUK
+======================================================================
+
+Nama: Sena
+Kategori: autonomous Minecraft Java Edition agent berbasis Mineflayer.
+Antarmuka utama pengguna: Discord. Versi pertama TIDAK memerlukan dashboard web terpisah.
+Bahasa implementasi utama: TypeScript di Node.js, dengan integrasi terhadap library JavaScript Mineflayer.
+Runtime: Node.js versi yang kompatibel dengan versi Mineflayer terpilih. Repository Mineflayer yang diperiksa untuk spesifikasi ini menunjukkan engines Node >=22; verifikasi ulang sebelum mengunci versi. Pilih rilis LTS yang didukung, lock dependency, serta dokumentasikan versi Node/npm.
+
+Tujuan Sena:
+- Bertahan hidup dan beroperasi secara mandiri di Minecraft.
+- Menerima tujuan melalui Discord, lalu merencanakan, bertindak, mengecek hasil, memperbaiki kesalahan, dan melanjutkan ke tujuan berikutnya.
+- Mengumpulkan sumber daya, membuat/menggunakan peralatan, menjelajah, membangun struktur, dan melakukan PVP/PVE sesuai policy server yang dikonfigurasi.
+- Memanfaatkan plugin Mineflayer yang matang sebagai action/capability layer, bukan menulis ulang pathfinding, collect-block, atau combat tanpa alasan.
+- Menggunakan NVIDIA NIM LLM dan NVIDIA NIM VLM dengan konfigurasi serta API key terpisah.
+- Tetap menjalankan core, task persistence, recovery, event handling, memory, dan kemampuan deterministik terbatas saat LLM/VLM/API/Discord tidak tersedia.
+- Menyimpan memori jangka panjang dan belajar dari pengalaman, terutama keberhasilan/kegagalan tugas dan kematian.
+- Mendukung module/community extension: pengguna menaruh folder modul di modules/ dan menambahkan module.json di root folder modul. Struktur internal selebihnya milik pembuat modul dan tidak boleh dipaksakan oleh core.
+- Mampu merancang struktur baru tanpa selalu membutuhkan schematic yang telah disediakan. Schematic, contoh, atau gambar hanyalah referensi opsional.
+- Tidak membutuhkan pemain manusia untuk memberi instruksi pada setiap langkah. Otonomi tetap dibatasi oleh policy keselamatan dan sumber daya.
+
+Batasan:
+- Sena tidak boleh mengklaim dapat melakukan hal yang belum diuji atau tidak didukung oleh server/plugin.
+- Sena tidak boleh menganggap data dunia yang belum dimuat/diketahui sebagai fakta pasti.
+- Otonomi penuh bukan jaminan semua tugas baru bisa diselesaikan saat model, koneksi, world state, atau sumber daya tidak tersedia. Dalam kondisi itu Sena harus menurunkan kemampuan, memilih tindakan aman, mencari pemulihan, atau menandai tugas blocked.
+
+======================================================================
+2. PRINSIP ARSITEKTUR WAJIB
+======================================================================
+
+2.1 Pisahkan otak, kemampuan, dan antarmuka
+- Core mengatur lifecycle, task queue, state machine, validasi tindakan, izin modul, keselamatan, persistence, dan recovery.
+- LLM merencanakan/menalar dalam lingkup yang ditentukan; ia bukan pemilik langsung object bot dan tidak boleh bebas memanggil fungsi Minecraft.
+- VLM menganalisis gambar sebagai bukti tambahan; output VLM bukan ground truth dan bukan aksi yang dapat dieksekusi langsung.
+- Plugin Mineflayer menyediakan kemampuan tingkat rendah/menengah.
+- Discord hanyalah control plane dan dashboard; Sena tidak boleh berhenti hanya karena Discord mati.
+- World model menyimpan keadaan terstruktur berdasarkan data Mineflayer/event dan menandai freshness/uncertainty.
+- Learning system mengubah memori, prosedur, strategi, atau ranking strategi berdasarkan bukti. Jangan menyebut logging biasa sebagai learning.
+
+2.2 Satu action coordinator
+Semua kemampuan yang menggerakkan bot harus dikoordinasikan melalui Action Coordinator/Task Executor. Hindari dua plugin atau dua task mengendalikan gerakan/tangan/inventaris pada saat yang sama.
+- Satu aksi eksklusif untuk resource yang bentrok: movement, digging/collecting, combat, placement, equipment swap, authentication chat.
+- Aksi yang aman boleh berjalan paralel hanya jika tidak mengubah resource/action channel yang sama.
+- Aksi memiliki owner task, timeout, cancellation token, deadline, preconditions, success condition, failure reason, dan cleanup.
+- Setiap aksi diverifikasi lewat state aktual/event, bukan hanya karena fungsi plugin resolve.
+- Bila task dihentikan, lepaskan kontrol plugin (mis. stop pathfinder/PVP bila API mendukung), batalkan loop, dan simpan progress.
+
+2.3 Degraded mode
+Sena harus punya mode operasional jelas:
+- NORMAL: provider dan world data yang dibutuhkan tersedia.
+- DEGRADED_NO_LLM: jalankan strategi lokal/tersimpan yang telah diuji; jangan mulai tugas baru yang membutuhkan reasoning kompleks.
+- DEGRADED_NO_VLM: lanjutkan tugas yang bisa diverifikasi lewat data Mineflayer; jangan berpura-pura melihat objek yang tidak diketahui.
+- OFFLINE_AI: kedua AI remote tidak tersedia; core, task queue, event handling, memory lokal, dan deterministic skills tetap hidup.
+- DISCONNECTED_MINECRAFT: tidak menjalankan aksi seolah-olah bot ada di dunia; retry dengan backoff dan memeriksa ulang state setelah spawn kembali.
+- DISCONNECTED_DISCORD: teruskan tugas lokal; antrekan alert yang relevan untuk dikirim setelah reconnect.
+- SAFE_HALT: hentikan aksi aktif yang berbahaya saat invariants rusak atau state tidak dapat dipercaya.
+
+2.4 Berbasis bukti dan ketidakpastian
+Setiap fakta penting yang masuk ke planner/learning harus memiliki source, timestamp, confidence atau status kepastian, dan version/context jika relevan. Gunakan nilai seperti known, inferred, stale, dan unknown. Jangan menganggap absence of evidence sebagai evidence of absence.
+
+2.5 Persistensi lebih penting daripada umur proses
+Task, phase/progress, hasil pembelajaran, memori, config non-secret, dan status operasi harus tetap tersedia setelah restart. Sebelum melanjutkan task setelah restart/reconnect, inspeksi dunia aktual, validasi ulang precondition, lalu lanjutkan dari progress terverifikasi; jangan replay semua aksi tanpa pemeriksaan.
+
+======================================================================
+3. SUMBER RESMI DAN AUDIT KOMPATIBILITAS
+======================================================================
+
+Mulai dengan memeriksa sumber ini. Verifikasi branch aktif, package name, API, lisensi, dependency, dukungan versi Minecraft, status maintenance, serta Node compatibility. URL adalah titik awal untuk riset, bukan jaminan semua branch/API tetap sama.
+
+Mineflayer core:
+- https://github.com/PrismarineJS/mineflayer
+- Contoh bridge Discord: https://github.com/PrismarineJS/mineflayer/blob/master/examples/discord.js
+
+Kemampuan/plugin yang diminta:
+- mineflayer-pathfinder: https://github.com/PrismarineJS/mineflayer-pathfinder
+- mineflayer-collectblock: https://github.com/TheDudeFromCI/mineflayer-collectblock
+- mineflayer-pvp: https://github.com/TheDudeFromCI/mineflayer-pvp
+- mineflayer-tool: cari repository/package resmi dan verifikasi API yang sesuai versi.
+- Armor manager: https://github.com/G07cha/MineflayerArmorManager (verifikasi aktif dan kompatibilitasnya).
+- Hawkeye / ranged aim: titik awal yang pernah dirujuk https://github.com/sefirosweb/minecraftHawkEye; verifikasi repository/API aktif.
+- Projectile: titik awal yang pernah dirujuk https://github.com/firejoust/mineflayer-projectile; verifikasi API, support item, dan kompatibilitas.
+- Auto-auth: titik awal yang pernah dirujuk https://github.com/G07cha/MineflayerAutoAuth; verifikasi cara penggunaan serta scope autentikasi.
+- Death event: titik awal yang pernah dirujuk https://github.com/tuanzisama/mineflayer-death-event; verifikasi event yang benar-benar dihasilkan.
+- discord.js: https://discord.js.org/ dan dokumentasi resminya.
+- NVIDIA NIM: dokumentasi API/model/vision terbaru dari NVIDIA Developer; jangan mengunci model ID hanya dari ingatan.
+- Local inference opsional: Ollama API documentation dan model vision/text yang kompatibel.
+
+PENTING:
+- mineflayer-collectblock README menjelaskan bahwa plugin ini membungkus konsep navigasi ke blok, memilih tool melalui mineflayer-tool, mining, dan mengambil drop; sebagian varian memiliki antrean pengumpulan serta fasilitas chest. Validasi kemampuan tersebut berdasarkan versi yang benar-benar dipasang.
+- mineflayer-pvp mencantumkan mineflayer-pathfinder sebagai dependency plugin yang harus di-load. Verifikasi urutan load aktual.
+- Contoh Discord resmi Mineflayer adalah bridge pesan sederhana untuk discord.js v14. Sena membutuhkan adapter yang jauh lebih aman; jangan menyalin bridge sederhana itu sebagai dashboard/permission system produksi.
+- Jangan membuka link mati lalu menebak API. Catat paket yang gagal diverifikasi dan implementasikan interface no-op yang jelas hanya jika feature flag belum aktif. Jangan mengiklankan plugin tersebut sebagai siap pakai.
+- Jangan mengganti provider/package tanpa mencatat keputusan, alasan, risiko, dan kompatibilitasnya.
+
+Buat docs/COMPATIBILITY.md yang mencatat tanggal audit, versi Node, versi Mineflayer, target versi Minecraft, versi discord.js, setiap package/plugin, cara load, dependency order, tested/not tested, serta keputusan yang belum pasti.
+
+======================================================================
+4. TEKNOLOGI DAN PERSYARATAN KODE
+======================================================================
+
+Default yang disarankan:
+- Node.js LTS yang memenuhi engines semua dependency; target awal Node >=22 jika masih didukung oleh versi Mineflayer yang dipilih.
+- TypeScript dengan strict mode dan ESM, kecuali terdapat alasan kompatibilitas kuat untuk berbeda.
+- npm sebagai package manager dan package-lock.json wajib di-commit ke artefak proyek lokal.
+- discord.js versi stabil yang sesuai API slash commands/interactions.
+- Mineflayer + plugin yang lulus compatibility audit.
+- Schema validation (mis. Zod atau alternatif terawat) untuk config, module manifest, pesan LLM, task, serta data dari external provider.
+- Structured logging dengan level, correlation ID, task ID, module ID, dan redaction otomatis.
+- Persistence: abstraksi repository/store dan database lokal transaksional (SQLite jika driver kompatibel dengan OS/runtime yang dipakai); gunakan migrasi. Event/episode besar dapat disimpan sebagai JSONL terrotasi atau berkas terstruktur. Hindari menyimpan image mentah tanpa policy/retention.
+- Unit/integration tests dengan runner stabil yang kompatibel dengan TypeScript stack.
+- Formatting/lint/typecheck/build scripts yang benar-benar jalan.
+
+Jangan berasumsi semua mesin dapat membangun native dependencies yang sama. Uji instalasi pada environment target yang tersedia dan sediakan pesan error/setup docs yang berguna.
+
+======================================================================
+5. STRUKTUR REPOSITORY TARGET
+======================================================================
+
+Buat struktur awal yang masuk akal dan kembangkan secara bertahap. Nama file dapat disesuaikan, tetapi batas tanggung jawab tidak boleh hilang.
+
+Sena/
+  package.json
+  package-lock.json
+  tsconfig.json
+  eslint.config.* atau konfigurasi lint yang dipilih
+  .gitignore
+  .env.example
+  README.md
+  LICENSE (pilih lisensi yang sesuai dan dokumentasikan; jangan salin lisensi dependency)
+  docs/
+    ARCHITECTURE.md
+    COMPATIBILITY.md
+    CONFIGURATION.md
+    DISCORD.md
+    MODULES.md
+    LEARNING.md
+    VISION.md
+    TROUBLESHOOTING.md
+    SECURITY.md
+    TESTING.md
+  config/
+    default.example.json
+  src/
+    main.ts
+    app/
+      bootstrap.ts
+      shutdown.ts
+      health.ts
+    core/
+      runtime.ts
+      lifecycle.ts
+      event-bus.ts
+      errors.ts
+      config/
+      logging/
+      tasks/
+      actions/
+      safety/
+      watchdog/
+      recovery/
+      modules/
+        module-discovery.ts
+        manifest-schema.ts
+        manifest-validator.ts
+        dependency-resolver.ts
+        module-registry.ts
+        module-loader.ts
+        module-lifecycle.ts
+        permission-manager.ts
+        module-api.ts
+        module-host.ts
+      providers/
+      persistence/
+    adapters/
+      minecraft/
+        minecraft-adapter.ts
+        bot-factory.ts
+        connection-manager.ts
+        event-normalizer.ts
+        world-observer.ts
+        plugin-registry.ts
+      discord/
+        discord-adapter.ts
+        command-registration.ts
+        command-router.ts
+        interaction-authorization.ts
+        dashboard-renderer.ts
+        notification-queue.ts
+    ai/
+      llm/
+        llm-manager.ts
+        provider-interface.ts
+        nvidia-nim/
+        local-ollama/
+        prompt-registry.ts
+        output-validator.ts
+      vision/
+        vision-manager.ts
+        provider-interface.ts
+        input/
+        nvidia-nim/
+        local-vlm/
+        perception/
+        output/
+        cache/
+    intelligence/
+      goal-manager.ts
+      planner.ts
+      task-decomposer.ts
+      strategy-selector.ts
+      decision-policy.ts
+      reflection.ts
+    world/
+      world-model.ts
+      observation-store.ts
+      entity-tracker.ts
+      inventory-model.ts
+      spatial-model.ts
+      uncertainty.ts
+    memory/
+      memory-service.ts
+      episodic-memory.ts
+      semantic-memory.ts
+      procedural-memory.ts
+      spatial-memory.ts
+      task-memory.ts
+      retrieval.ts
+      consolidation.ts
+    learning/
+      learning-coordinator.ts
+      experience-collector.ts
+      episode-builder.ts
+      outcome-classifier.ts
+      discovery/
+      strategies/
+      evaluation/
+      sharing/
+      model-updates/
+    execution/
+      action-coordinator.ts
+      action-executor.ts
+      action-validator.ts
+      cancellation.ts
+      verification.ts
+    storage/
+      database.ts
+      migrations/
+      repositories/
+      backups.ts
+    util/
+  modules/
+    basic/
+      module.json
+      index.js
+      (reflex/ and arbitrary internal files owned by this module)
+    navigation/
+      module.json
+      (arbitrary contents)
+    collecting/
+      module.json
+      (arbitrary contents)
+    combat/
+      module.json
+      (arbitrary contents)
+    armor-manager/
+      module.json
+      (arbitrary contents)
+    tool-management/
+      module.json
+      (arbitrary contents)
+    projectiles/
+      module.json
+      (arbitrary contents)
+    auto-auth/
+      module.json
+      (arbitrary contents)
+    death-events/
+      module.json
+      (arbitrary contents)
+  data/
+    .gitkeep
+    learning/
+    backups/
+  logs/
+    .gitkeep
+  tests/
+    unit/
+    integration/
+    fixtures/
+  scripts/
+    setup.*
+    validate-modules.*
+
+Boleh memakai susunan file berbeda jika membantu, tetapi tetap pertahankan pemisahan core, adapters, modules, AI, world model, memory, learning, execution, dan Discord. Jangan membuat file/folder kosong tanpa implementasi atau alasan yang jelas. Tree di atas merupakan target arsitektur, bukan tuntutan membuat semua file pada commit pertama.
+
+======================================================================
+6. SISTEM MODUL DINAMIS
+======================================================================
+
+6.1 Aturan folder modul
+- Root modul adalah modules/<nama-folder>/.
+- Setiap modul valid wajib memiliki modules/<nama-folder>/module.json tepat di root folder modul.
+- Core memindai subfolder langsung di modules/ saat startup dan dapat menyediakan perintah admin untuk rescan/reload secara aman.
+- Folder yang tidak memiliki module.json, JSON invalid, ID duplikat, API incompatible, dependency hilang, entry di luar folder, atau permission tidak diizinkan harus ditolak dengan alasan yang tercatat. Jangan crash seluruh Sena karena satu modul rusak.
+- Selain module.json dan entry yang ditetapkan pada manifest, modul bebas memiliki layout/subfolder/aset sesuai kebutuhan pembuat modul. Jangan mewajibkan struktur internal tertentu.
+- `entry` di manifest menunjuk file entry sebenarnya; validasi path traversal agar file tidak dapat menunjuk keluar dari folder modul.
+- Module discovery, validation, permissions, lifecycle, dan API adalah tanggung jawab core, bukan capability gameplay dalam modul basic.
+
+6.2 Manifest minimum
+Gunakan schema yang tervalidasi dan versioned. Contoh bentuk konseptual:
+{
+  "schema_version": "1.0",
+  "id": "basic",
+  "name": "Basic Reflex",
+  "version": "1.0.0",
+  "description": "Minimal reflex capability",
+  "entry": "index.js",
+  "api_version": "^1.0.0",
+  "capabilities": ["reflex"],
+  "dependencies": [],
+  "permissions": ["events.subscribe", "world.read"]
+}
+
+Nama ID harus unik, lowercase, dan memiliki format yang dibatasi. Semver version/API compatibility diperiksa. Tambahkan field optional seperti author, homepage, config_schema, enabled_by_default, trust_level, atau compatibility hanya jika ada alasan terdokumentasi.
+
+6.3 Module API
+Sediakan API stabil, versioned, dan terdokumentasi, minimal mencakup:
+- registerCapability(name, handler/descriptor)
+- event subscription dengan cleanup lifecycle
+- read-only world/inventory/entity observations yang tersedia
+- task enqueue/get/cancel sesuai izin
+- action request melalui coordinator saja
+- memory read/write melalui layanan memori yang divalidasi
+- logger scoped ke module ID
+- config yang sudah divalidasi
+- declare dependency/capability dan health status
+
+Jangan mengirim raw `bot` object ke semua modul secara default. Aksi langsung yang melompati coordinator harus dianggap error/security violation.
+
+6.4 Keamanan modul komunitas
+`module.json` bukan bukti bahwa kode aman. Kode JS yang dijalankan in-process memiliki akses ke proses Node, filesystem, network, dan environment. Implementasikan trust policy eksplisit:
+- modul built-in yang disertakan proyek dapat dipercaya berdasarkan release/project policy;
+- modul lokal baru dideteksi lalu ditampilkan statusnya;
+- auto-load kode pihak ketiga hanya jika dikonfigurasi/dipercaya secara eksplisit;
+- validasi permission dan API tetap wajib;
+- untuk modul yang tidak dipercaya, gunakan isolasi proses/IPC dengan API sempit jika implementasi aman bisa dicapai. Jangan mengklaim Worker Thread sebagai sandbox keamanan yang sempurna;
+- jika isolasi belum tersedia, jangan jalankan modul tidak tepercaya otomatis. Dokumentasikan keterbatasan dengan jelas.
+- Hot reload tidak boleh meninggalkan listener, interval, loop, atau kontrol bot yang menggantung. Matikan lifecycle lama dan validasi ulang task sebelum mengaktifkan versi baru.
+
+6.5 Basic module
+`modules/basic` hanya berisi kemampuan `reflex` sebagai gameplay capability bawaan. Jangan memindahkan loader/runtime, memory system, task system, planner, action coordinator, atau semua skill survival ke `basic`. Infrastruktur itu milik core.
+
+Reflex menangani respons cepat/deterministik yang sederhana berdasarkan event/state yang telah ditentukan, misalnya memicu pemeriksaan safety ketika health sangat rendah atau menghindari deadlock. Reflex tidak boleh menjadi planner tersembunyi yang menjalankan aksi tak terbatas.
+
+6.6 Capability modules awal
+- navigation: adapter kemampuan pathfinder.
+- collecting: adapter collectblock.
+- combat: adapter PVP + Hawkeye/ranged functionality bila lolos audit.
+- armor-manager: adapter armor selection/equip.
+- tool-management: adapter mineflayer-tool dan pemilihan alat.
+- projectiles: adapter projectile dan strategi ender pearl jika API dan item behavior terverifikasi.
+- auto-auth: penanganan login chat yang diizinkan.
+- death-events: normalisasi event kematian untuk dikonsumsi learning system.
+
+Semua modul punya manifest, dependency/permission deklaratif, health check, start/stop/dispose, serta test. Kalau salah satu package tidak tersedia, module itu harus dilaporkan unavailable/disabled; core tetap hidup.
+
+======================================================================
+7. MINEFLAYER ADAPTER DAN PLUGIN ACTION LAYER
+======================================================================
+
+7.1 Bot lifecycle
+Buat factory dan connection manager yang menangani:
+- host, port, username, auth mode, version yang optional sesuai Mineflayer;
+- config/secret validation tanpa log kredensial;
+- connect, login, spawn, kicked, error, end, reconnect/backoff;
+- peristiwa world/entity/inventory/health/equipment yang tersedia;
+- sinkronisasi saat spawn ulang;
+- clean shutdown.
+Jangan membuat reconnect storm. Setelah reconnect, invalidate world facts yang stale dan sinkronkan kembali keadaan aktual.
+
+7.2 Plugin registry
+- Load plugin dalam dependency order dan verifikasi fungsi API setelah load.
+- Hindari load plugin yang sama berkali-kali.
+- Punya status per plugin: discovered, compatible, loaded, ready, degraded, failed, disabled.
+- Catat versi dan alasan load gagal.
+- Jangan jalankan capability yang statusnya failed.
+
+7.3 Pathfinder
+- Gunakan pathfinder untuk navigasi dan goals sesuai API aktual.
+- Hormati movement configuration, hazard policy, allowed regions, dan task deadline.
+- Mendeteksi stuck/no-progress, route failure, timeout, dan world changes.
+- Jika terhalang, refresh observation, cari rute alternatif, atau tandai lokasi tidak bisa dijangkau.
+- Jangan menganggap bot tahu area yang belum dimuat.
+
+7.4 Collectblock
+- Gunakan collectblock untuk pengumpulan blok/drop ketika cocok.
+- Task harus memeriksa target/jenis/jumlah/resource budget, tool, inventory capacity, dan route.
+- Tangani inventory penuh, tool tidak cukup, block hilang, route failure, interruption, dan task cancellation.
+- Karena collectblock dapat menggunakan pathfinder dan tool, koordinasikan mereka agar tidak ada perintah movement/mining bersamaan dari module lain.
+- Jangan mengulang pengumpulan tanpa batas. Gunakan target count, deadline, retry cap, dan stagnation detection.
+
+7.5 Tool dan armor manager
+- Prioritaskan tool yang cocok dan tersedia, tetapi jangan mengasumsikan inventory item/metadata tidak stale.
+- Armor/equipment changes harus dijadwalkan sebagai action eksklusif jika bentrok dengan combat/equip operation lain.
+- Terapkan policy berdasar ancaman, durability/availability, dan tujuan; jangan membuang/menjatuhkan gear penting otomatis.
+
+7.6 PVP/PVE
+- mineflayer-pvp harus dimuat dengan dependency yang benar dan hanya dimulai jika policy mengizinkan.
+- Combat target harus jelas dan divalidasi: entity yang valid, jarak, tim/allowlist, konteks server, health/gear, dan risk policy.
+- Combat harus dapat dihentikan melalui action coordinator.
+- Pisahkan combat terhadap mob/PVE dan player/PVP. Default policy untuk PVP melawan pemain adalah disabled kecuali pemilik mengaktifkannya secara jelas untuk server/arena yang diizinkan.
+- Jangan menyerang pemain netral hanya karena terlihat dekat.
+- Hawkeye/ranged module digunakan untuk bidikan jarak jauh hanya setelah API dan plugin kompatibel diverifikasi.
+- Projectile/ender pearl tidak boleh diasumsikan identik: validasi item, arah, gerak, cooldown, jarak, target/landing, dan risiko jatuh. Jika plugin tidak mendukung ender pearl, implementasikan adapter/skill terpisah hanya berdasarkan protokol/API yang dapat diverifikasi.
+- Setelah serangan, verifikasi hasil; jangan menandai target mati hanya berdasarkan asumsi.
+
+7.7 Auto-auth
+- Hanya menangani autentikasi server yang memang diizinkan oleh pemilik akun/bot.
+- Kredensial diambil dari secret provider/environment yang aman; jangan menyimpan password dalam manifest, memory, task history, event payload, atau log.
+- Cocokkan prompt login melalui pola yang terkendali; batasi percobaan dan gunakan timeout.
+- Jangan bypass autentikasi, CAPTCHA, anti-bot, atau akses server tanpa izin.
+- Bila prompt tidak dikenali atau server meminta langkah yang tidak didukung, tandai authentication blocked dan beri alert Discord.
+
+7.8 Death event
+- Normalisasi event yang ada pada plugin/versi Mineflayer aktual.
+- Bedakan kematian, disconnect, kick, respawn, dan entity removal; jangan salah mengklasifikasikan disconnect sebagai death.
+- Saat kematian, simpan snapshot terakhir yang valid dengan timestamp dan confidence: posisi, health, armor/equipment, inventory yang diketahui, task aktif, target sekitar, damage/event jika tersedia, dan status koneksi.
+- Jangan pernah mengklaim penyebab kematian terkonfirmasi jika game API tidak menyediakannya. Gunakan `cause=unknown` atau kandidat penyebab dengan evidence.
+
+======================================================================
+8. WORLD MODEL DAN VISUAL PERCEPTION (VLM)
+======================================================================
+
+8.1 World model
+Sediakan model internal yang memisahkan fakta aktual, inferensi, dan ketidaktahuan. Gunakan timestamp/freshness dan source.
+- Bot: posisi, rotasi, health, hunger, game mode yang tersedia, status connection.
+- Inventory: item counts, equipment, tools, space remaining.
+- Entities: entity/player/mob yang terlihat oleh Mineflayer, posisi, status dan freshness.
+- Blocks/spatial: blok yang telah diamati, target/task coordinates, path/region, dan batas dunia yang diketahui.
+- Task: preconditions, target, progress verified, blockers, deadline, retry count.
+- Environment: time/weather/dimension/biome jika API tersedia.
+
+8.2 Kapan menggunakan VLM
+VLM adalah alat pelengkap, bukan syarat setiap aksi. Prioritaskan data Mineflayer terstruktur untuk fakta presisi seperti blok/koordinat/inventory. Panggil VLM bila interpretasi visual membantu: bentuk keseluruhan bangunan, layout, estimasi apakah bagian bangunan terlihat belum selesai, atau memahami screenshot yang kompleks.
+
+8.3 Pipeline VLM
+- Ambil screenshot/frame dari sumber yang sah dan kompatibel dengan runtime; jika tidak ada sumber screenshot yang dapat diandalkan, implementasikan interface provider dan catat sumber gambar yang diperlukan. Jangan mengarang kemampuan screenshot.
+- Validasi ukuran/format dan batas payload; crop/resize hanya jika dibutuhkan.
+- Pilih frame yang relevan dan hindari mengirim gambar terus-menerus tanpa manfaat.
+- Panggil provider melalui `VisionManager` dengan timeout/retry/rate-limit/cache.
+- Parse output ke schema JSON yang ketat, mis. observations, objects/layout claims, confidence/uncertainty, evidence, model/provider/version, timestamp.
+- Validasi output dan bandingkan dengan world model bila mungkin.
+- VLM tidak boleh mengeksekusi tindakan langsung.
+- Jangan simpan screenshot mentah secara permanen secara default; atur retention, privacy dan disk budget.
+
+8.4 Occlusion/failure fallback
+Jika VLM tidak bisa melihat suatu objek/area:
+1. tandai area/claim sebagai unknown atau obstructed, bukan absent;
+2. minta orientasi/sudut pandang baru jika aman dan tujuan memerlukan data visual;
+3. gunakan data blok/entity yang benar-benar tersedia di Mineflayer;
+4. coba crop/frame alternatif bila ada alasan;
+5. jika bukti tetap kurang, lanjutkan hanya pada aksi yang tidak membutuhkan fakta itu atau tandai task blocked.
+Jangan membuat pergerakan kamera/bot yang berisiko hanya demi screenshot.
+
+8.5 Pemeriksaan bangunan
+Sena harus dapat merancang struktur baru dari tujuan fungsional. Misalnya untuk rumah, definisikan criteria seperti ruang terlindung, dinding, atap, pintu masuk, ruang gerak, akses keluar, serta item/amenities bila diminta. Hasil desain dibuat dinamis menjadi koordinat/blueprint sementara oleh planner; schematic eksternal hanya opsional.
+- Lakukan build dalam tahap kecil.
+- Periksa hasil berdasarkan koordinat/block data.
+- Gunakan VLM untuk penilaian tampilan keseluruhan, bukan sebagai satu-satunya bukti.
+- Bandingkan intended structure dengan actual world state.
+- Perbaiki gap atau kesalahan yang terdeteksi.
+- Verifikasi fungsi/kriteria yang dapat diuji dan laporkan hal yang belum bisa dibuktikan.
+- Jangan menyatakan build 100% sukses jika bagian yang perlu diverifikasi belum diketahui.
+
+======================================================================
+9. AI PROVIDERS: LLM DAN VLM
+======================================================================
+
+9.1 LLM
+Buat interface provider agar NVIDIA NIM dan provider lokal opsional dapat diganti tanpa mengubah planner.
+Environment/config yang disarankan:
+- NVIDIA_NIM_LLM_API_KEY
+- NVIDIA_NIM_LLM_BASE_URL (optional jika endpoint ditetapkan config)
+- NVIDIA_NIM_LLM_MODEL
+- AI_LLM_PROVIDER=nvidia-nim|ollama|none
+- OLLAMA_BASE_URL
+- OLLAMA_LLM_MODEL
+
+Gunakan env names yang konsisten dan jelaskan di docs. Jangan masukkan key sungguhan ke file.
+
+9.2 VLM
+Pisahkan key dan konfigurasi LLM/VLM seperti diminta:
+- NVIDIA_NIM_VLM_API_KEY
+- NVIDIA_NIM_VLM_BASE_URL (optional)
+- NVIDIA_NIM_VLM_MODEL
+- AI_VLM_PROVIDER=nvidia-nim|local|none
+- LOCAL_VLM_BASE_URL / LOCAL_VLM_MODEL jika provider lokal dipilih dan benar-benar didukung.
+
+Jangan mengasumsikan semua model NVIDIA NIM menerima image input. Sebelum memilih model ID/endpoint, periksa dokumentasi NIM terbaru, multimodal request format, ukuran gambar, output token limits, rate limits, dan ketersediaan akses. Simpan pilihan dalam config; jangan hardcode nama model di banyak file.
+
+9.3 Provider behavior
+Setiap provider mengimplementasikan interface konsisten:
+- healthCheck()
+- generateStructured(request, schema/validator)
+- abort/cancel bila tersedia
+- timeout dan retry policy
+- usage/latency metadata tanpa secret
+- error mapping (auth, rate limit, timeout, server unavailable, invalid request, output parse, quota)
+
+Implementasikan:
+- timeout yang terbatas;
+- retry exponential backoff dengan jitter dan batas jumlah;
+- circuit breaker;
+- response schema validation;
+- batas token/context/image payload;
+- request deduplication/cache jika aman;
+- prompt/version logging yang tidak menyimpan rahasia;
+- kontrol biaya dan batas request;
+- fallback ke provider alternatif hanya jika terkonfigurasi dan kompatibel.
+
+Jangan menyatakan tugas berhasil setelah timeout/HTTP error. Jangan retry tanpa batas.
+
+9.4 Kontrak LLM
+LLM memberikan proposal plan/task dalam bentuk terstruktur dengan ID, tujuan, preconditions, subtask, expected outcomes, risk/category, resource budget, deadline, dan verification plan. Core harus memvalidasi proposal terhadap module capabilities, world facts, permissions, dan safety policy sebelum mengeksekusinya.
+
+LLM bukan shell access, bukan akses database langsung, bukan pemilik kredensial dan bukan jalan pintas untuk melewati permission. Jangan mengeksekusi teks arbitrer yang dihasilkan model.
+
+======================================================================
+10. OTONOMI DAN TASK PLANNING
+======================================================================
+
+Sena menjalankan loop autonomic:
+1. Mengambil tujuan aktif dari persistent task queue, prioritas survival, atau perintah Discord.
+2. Mengumpulkan observation aktual dan mengevaluasi freshness.
+3. Menilai tujuan, kebutuhan, risiko, serta sumber daya.
+4. Memilih strategy dari procedural memory/strategy registry bila ada dan kompatibel.
+5. Jika tidak ada strategi tepat, meminta LLM membuat proposal; jika LLM mati, jangan mengarang reasoning yang tidak tersedia.
+6. Mengubah rencana menjadi action/task berukuran kecil dengan precondition, deadline, budget, dan success check.
+7. Action Coordinator menjalankan satu aksi yang sesuai dan memonitor progress.
+8. Verification membandingkan keadaan dunia dengan hasil yang diharapkan.
+9. Recovery mengatasi kegagalan, membuat alternate plan terbatas, atau menandai blocked.
+10. Experience Collector menyimpan hasil untuk learning.
+11. Memilih subtask berikutnya atau tujuan berikutnya tanpa menunggu manusia jika policy mengizinkan.
+
+10.1 Goal manager
+Dukung:
+- tujuan eksplisit Discord;
+- tujuan berjenjang dan subtasks;
+- prioritas survival seperti menghindari kematian yang dapat diperkirakan, mendapatkan food/tool dasar, dan mencari safety sesuai world config;
+- tujuan jangka panjang yang diaktifkan pemilik;
+- dependencies antara task;
+- pause/resume/cancel;
+- task queue persisten.
+
+Jangan membuat objective internal yang destruktif tanpa allow policy. Batas prioritas dan survival behavior harus configurable.
+
+10.2 Strategy/skill registry
+Menyimpan strategi yang dapat diuji, dengan:
+- nama/versi;
+- deskripsi dan task domain;
+- preconditions/context compatibility;
+- urutan actions/capability requirements;
+- success criteria;
+- failure cases/recovery;
+- evidence/source/provenance;
+- success/failure stats, sample count, uncertainty, last used.
+
+Jangan memilih strategi hanya karena pernah sukses satu kali. Bandingkan konteks dan jumlah evidence.
+
+10.3 Recovery
+- Bounded retry dan max attempts per task/action.
+- Stuck/progress detector.
+- Retry dengan perubahan strategy/context, bukan mengulang input identik tanpa evaluasi.
+- Simpan task state setelah milestone.
+- Setelah crash/restart, reconcile world state terlebih dahulu.
+- Jika recovery tidak aman/berhasil, hentikan task, tandai blocker, beritahu Discord bila tersedia, kemudian lanjutkan task independen yang aman.
+
+======================================================================
+11. LEARNING, MEMORI, DAN PENGALAMAN KEMATIAN
+======================================================================
+
+Learning adalah subsystem core di `src/learning/`, bukan gameplay module. Semua module boleh berkontribusi event/evidence melalui API yang diizinkan; hanya learning core yang memutuskan apa yang menjadi pengetahuan permanen.
+
+11.1 Jenis memori
+- Episodic: rangkaian kejadian/task tertentu beserta context, action, outcome.
+- Semantic: fakta/pengetahuan yang diringkas dan evidence-nya.
+- Procedural: cara melakukan sesuatu (skill/strategi) beserta preconditions dan test.
+- Spatial: lokasi, landmark, route, structure coordinates dengan freshness.
+- Task: tujuan, progress, dependencies, attempts, blockers, outcome.
+
+11.2 Siklus belajar
+Observe -> record episode -> classify outcome -> evaluate evidence/uncertainty -> update memory/strategy -> validate -> gunakan pada tugas serupa -> pantau ulang outcome.
+
+Learning harus memengaruhi retrieval, keputusan, prosedur, atau ranking strategi di masa depan. Hanya mencatat log tidak cukup.
+
+11.3 Death learning
+Saat death event:
+- snapshot context sebelum state hilang bila event lifecycle memungkinkan;
+- identifikasi task aktif dan action sequence terakhir;
+- ambil health/gear/inventory/position/nearby threats yang faktual;
+- klasifikasikan cause sebagai confirmed, likely, unknown dengan evidence;
+- analisis pola yang bisa diperbaiki (gear tidak memadai, terlalu jauh dari safe route, tidak makan, terjebak, jatuh) hanya jika didukung bukti;
+- tambahkan strategy guardrail atau update ranking hanya setelah validation;
+- recovery/respawn plan harus memperhitungkan server rules dan item loss.
+Jangan belajar sebab-akibat yang kuat dari satu kejadian dengan bukti minim. Tandai uncertainty dan koreksi setelah kejadian baru.
+
+11.4 Eksperimen mandiri
+Sena dapat merencanakan eksperimen kecil yang reversible/berisiko rendah. Setiap eksperimen membutuhkan hipotesis, batas resource/time, safety assessment, success/failure criterion, dan rollback/fallback. Dilarang melakukan loop tak terbatas atau eksperimen destruktif tanpa policy yang eksplisit.
+
+11.5 Model updates/fine-tuning opsional
+Fine-tuning bukan jalur belajar utama sehari-hari. Jangan otomatis mengubah live model dari satu percobaan. Jika model updates ditambahkan kelak: simpan dataset dengan provenance, validasi kualitas/data leakage, regression evaluation, candidate model, staged rollout, monitoring, dan rollback. Fitur ini boleh disabled pada versi awal.
+
+11.6 Knowledge sharing opsional
+Rancang ekspor/impor pengetahuan yang selektif, dengan provenance, version, compatibility context (Minecraft version/server/mod/plugin/API), schema validation, integrity check, trust policy, quarantine, serta conflict resolution. Import dari bot lain tidak otomatis menjadi fakta tepercaya. Jangan pernah membagikan password, API keys, Discord token, identitas pemain sensitif, atau raw private chat.
+
+======================================================================
+12. DISCORD SEBAGAI DASHBOARD UTAMA
+======================================================================
+
+Tidak ada dashboard web penuh dalam MVP. Discord menggunakan discord.js dengan slash commands, embeds, buttons, select menus, modal/interactions yang sesuai. Gunakan contoh Mineflayer discord.js sebagai referensi dasar saja, bukan langsung sebagai implementasi final.
+
+12.1 Command minimal
+- `/sena status`: status Minecraft, Discord, LLM/VLM, mode (NORMAL/DEGRADED/etc), current task, health/inventory ringkas jika tersedia.
+- `/sena task objective:<text>`: memasukkan goal ke task queue.
+- `/sena tasks`: list task, status, priority, ID.
+- `/sena cancel task_id:<id>`: membatalkan task jika aman.
+- `/sena pause`: jangan menerima/menjalankan task baru; minta action executor menghentikan atau menyelesaikan aksi aktif dengan aman sesuai policy.
+- `/sena resume`: setelah precondition/state validation.
+- `/sena stop`: prosedur emergency stop yang menghentikan aksi aktif dengan aman. Jangan disamakan dengan mematikan proses tanpa cleanup.
+- `/sena inventory`: inventory summary.
+- `/sena inspect`: minta laporan world/target area berdasarkan data yang tersedia.
+- `/sena memory query:<text>`: ringkasan memory relevan dengan redaction.
+- `/sena modules`: status module, versi, capability, loaded/degraded/error.
+- `/sena learning`: ringkasan experience dan strategi baru.
+- `/sena health`: komponen runtime, queue lag, provider health, database status.
+- `/sena config`: hanya menampilkan config non-secret yang diizinkan; tidak boleh mengirimkan secret ke channel.
+
+Implementasi awal boleh memecah kelompok command sesuai batasan Discord. Dokumentasikan nama dan opsi final.
+
+12.2 Kanal yang direkomendasikan
+- `#sena-dashboard`: dashboard embed yang diperbarui dan tombol kontrol.
+- `#sena-commands`: task requests jika kanal command digunakan selain slash commands.
+- `#sena-live-log`: ringkasan event penting, bukan spam setiap tick.
+- `#sena-alerts`: death, disconnect, auth blocked, task failed, safety halt, recovery failures.
+- `#sena-learning`: pembelajaran/strategi yang telah dievaluasi, bukan dump memori mentah.
+- `#sena-modules`: perubahan status/errors modul.
+- `#sena-combat`: ringkasan combat jika diaktifkan.
+
+Channel IDs boleh ditentukan di config. Jangan mengasumsikan nama channel ada; jika tidak tersedia, kirim pesan error konfigurasi yang membantu dan teruskan core runtime.
+
+12.3 Keamanan Discord
+- Gunakan daftar DISCORD_OWNER_IDS dan/atau DISCORD_ADMIN_ROLE_IDS yang terkonfigurasi.
+- Setiap command berbahaya/berprivilege harus memverifikasi guild, channel scope, role/user allowlist, dan argument.
+- Jangan menerima pesan semua user dan langsung meneruskannya ke `bot.chat` seperti contoh bridge sederhana.
+- Pesan pemain Minecraft adalah input untrusted, tidak pernah menjadi admin command otomatis.
+- Batasi cooldown, panjang input, ukuran payload, dan frekuensi update.
+- Sanitize markdown/mentions dan hindari @everyone mass mentions.
+- Jangan mengirim stack trace atau secret ke Discord.
+- Jika bot Discord offline, queue alert yang masih relevan dengan TTL/deduplication untuk dikirim setelah reconnect.
+
+12.4 Dashboard status
+Gunakan satu atau beberapa embeds yang diperbarui (bukan membuat pesan baru setiap tick), dengan:
+- status core dan koneksi Minecraft;
+- current mode dan task ID/progress;
+- status module yang penting;
+- status provider LLM/VLM (online/degraded/offline, latency/error class, tidak pernah menampilkan key);
+- ringkasan survival/inventory yang tersedia;
+- latest learning/recovery summary.
+
+Discord outage tidak boleh menyebabkan action queue atau world state mati.
+
+======================================================================
+13. SECURITY, POLICY, DAN BATAS OTONOMI
+======================================================================
+
+- Sena hanya dihubungkan ke server/akun yang dikontrol pemilik atau yang memiliki izin penggunaan bot.
+- Hormati aturan server dan plugin anticheat. Jangan menyisipkan fitur untuk melewati autentikasi, anti-bot, CAPTCHA, atau proteksi akses tanpa izin.
+- PVP terhadap pemain disabled by default; konfigurasi scope server/arena secara jelas.
+- Jangan menghancurkan bangunan/terrain milik orang, mencuri chest, mengubah redstone, atau memodifikasi area yang tidak diizinkan hanya karena planner menganggapnya efisien. Gunakan allowed region/block policy dan pengecekan kepemilikan/izin jika tersedia.
+- Setiap mining/placement/build action periksa policy area, allowed blocks, protected zones, resource budget, dan task intent.
+- Set bounds pada koordinat/jangkauan agar bug planner tidak menimbulkan perjalanan/aksi tak terbatas.
+- Jangan pernah mengeksekusi kode shell/JS arbitrer dari LLM atau pesan Discord.
+- Semua external input (Discord, chat Minecraft, image description, module metadata, model output, imported knowledge) dianggap untrusted dan divalidasi.
+- API key/password/token disimpan di environment/secret storage, tidak di source control, prompt, learning dataset, SQLite task history, module manifest, atau log.
+- `.env` harus ada di `.gitignore`; sediakan `.env.example` hanya dengan nama variable dan placeholder kosong/contoh palsu.
+- Lakukan secret redaction dan safe error reporting.
+- Action safety gate selalu ada; model/learning tidak dapat mengubah atau menonaktifkan guardrail mandatory.
+- Stop/halt harus menghentikan loops/timers dan melepas kontrol plugin. Jangan memaksa bot mati tanpa persist dan cleanup, kecuali ada emergency shutdown process yang terdokumentasi.
+- Implementasikan backups, DB migrations, retention, log rotation, dan database integrity handling.
+
+======================================================================
+14. CONFIGURATION DAN FILE RAHASIA
+======================================================================
+
+Sediakan `.env.example` minimal dengan kategori (nilai nyata harus diisi pemilik):
+- MINECRAFT_HOST
+- MINECRAFT_PORT
+- MINECRAFT_USERNAME
+- MINECRAFT_AUTH
+- MINECRAFT_VERSION (optional jika Mineflayer dapat mendeteksi; document behavior)
+- MINECRAFT_PASSWORD atau credential-specific variable jika benar-benar dibutuhkan; jangan gunakan jika auth method tidak memerlukan password.
+- DISCORD_BOT_TOKEN
+- DISCORD_OWNER_IDS
+- DISCORD_GUILD_ID (optional)
+- DISCORD_DASHBOARD_CHANNEL_ID (optional)
+- DISCORD_ALERTS_CHANNEL_ID (optional)
+- NVIDIA_NIM_LLM_API_KEY
+- NVIDIA_NIM_LLM_MODEL
+- NVIDIA_NIM_LLM_BASE_URL (optional)
+- NVIDIA_NIM_VLM_API_KEY
+- NVIDIA_NIM_VLM_MODEL
+- NVIDIA_NIM_VLM_BASE_URL (optional)
+- AI_LLM_PROVIDER
+- AI_VLM_PROVIDER
+- OLLAMA_BASE_URL (optional)
+- OLLAMA_LLM_MODEL (optional)
+- LOCAL_VLM_BASE_URL/LOCAL_VLM_MODEL jika provider lokal terdukung
+- SENA_DATA_DIR (optional)
+- LOG_LEVEL
+
+Env list final harus berdasarkan provider/API terpilih dan terdokumentasi. Jangan meminta user membuat key untuk provider yang dinonaktifkan. Jangan menulis secret ke config/default.example.json.
+
+Sediakan command setup/validation yang:
+- memastikan Node/npm yang didukung;
+- mengecek config wajib;
+- memeriksa module manifest;
+- melakukan provider health check opsional tanpa mengekspos key;
+- bisa menyalakan mode offline/test tanpa token Discord atau API key.
+
+======================================================================
+15. PERSISTENCE DAN DATA MODEL
+======================================================================
+
+Buat schema persistence versioned/migrated untuk minimal:
+- runtime_state / shutdown checkpoint;
+- task dan task events;
+- action/attempt records dengan redaction;
+- module registry/cache status (jangan menyimpan trust approval tanpa audit);
+- memory entries dan provenance;
+- learning episodes/strategy/evaluation;
+- provider health/metrics agregat;
+- Discord notification outbox dengan dedupe/TTL.
+
+Setiap task memiliki: id, created_at, source (discord/goal manager/recovery), owner/authorization context, goal, priority, status, deadline, retries, current phase, progress checkpoint, capability requirements, expected result, verification result, last error category, cancellation state.
+
+Status task minimal: queued, planning, ready, running, waiting, paused, blocked, succeeded, failed, cancelled, interrupted.
+
+Jangan menyimpan seluruh prompt response tanpa batas. Lakukan retention dan pemangkasan payload besar. Jangan menyimpan screenshot mentah kecuali policy eksplisit mengaktifkannya.
+
+======================================================================
+16. OBSERVABILITY DAN HEALTH
+======================================================================
+
+Implementasikan structured logs dan health snapshot. Health mencakup:
+- runtime lifecycle;
+- Minecraft connection/spawn status;
+- Discord connection and command registration;
+- loaded/failed modules;
+- task queue counts/oldest age;
+- active action/task and progress age;
+- LLM/VLM provider health, latency dan error classes;
+- persistence/DB health;
+- memory/learning queue health;
+- watchdog/recovery counts.
+
+Gunakan correlation/task IDs agar satu tindakan dapat ditelusuri dari goal -> plan -> action -> verification -> learning. Log berfrekuensi tinggi harus diringkas agar tidak membanjiri terminal atau Discord.
+
+======================================================================
+17. FAILURE MATRIX DAN PERILAKU FALLBACK
+======================================================================
+
+LLM API down:
+- circuit breaker menandai provider unavailable;
+- pilih strategy dari registry jika preconditions cocok;
+- jalankan task deterministik yang teruji;
+- jangan mulai novel complex task yang butuh planning baru;
+- status/report task menjadi degraded atau blocked bila perlu;
+- retry health check dengan backoff.
+
+VLM API down:
+- gunakan structured Mineflayer world data bila tersedia;
+- jangan menyimpulkan objek tidak ada karena tidak tampak;
+- hentikan visual-only verification atau tandai belum diverifikasi;
+- strategi reposition/capture frame lain hanya jika aman dan memang diperlukan.
+
+LLM dan VLM down:
+- core/event bus/action safety/persistence tetap berjalan;
+- jalankan deterministic/autonomous procedures yang sudah diuji dan diizinkan;
+- jangan improvisasi yang memerlukan model;
+- pilih safety action atau task independen;
+- beri tahu Discord jika tersedia.
+
+Discord down:
+- task aktif terus berjalan menurut policy;
+- notification outbox menyimpan alert penting dengan TTL/dedupe;
+- jangan memblokir world loop menunggu Discord.
+
+Minecraft disconnect/kicked:
+- stop/cancel action yang bergantung pada bot aktif;
+- persist task progress sebagai interrupted/paused;
+- reconnect terbatas dengan backoff sesuai config;
+- setelah spawn, re-sync world/inventory/position dan validate task.
+
+Module crash:
+- isolate module failure; stop modul itu dan revoke actions/listeners-nya;
+- core tetap berjalan jika invariants aman;
+- disable capability yang gagal dan pilih fallback;
+- kirim alert dengan module ID dan safe error message.
+
+Pathfinder stuck:
+- deteksi progress metrics dan timeouts;
+- hentikan rute saat ini, refresh observation, coba route/goal alternatif terbatas;
+- jika tetap gagal, mark blocked dan jangan loop terus menerus.
+
+Collectblock failure:
+- verifikasi item/tool/world/inventory; ubah target atau rencana sesuai evidence;
+- jangan memanggil ulang loop tanpa retry cap.
+
+Death:
+- simpan death episode dari evidence tersedia;
+- hentikan task yang tidak valid dan reconcile setelah respawn;
+- evaluasi recovery/retrieve items hanya sesuai server policy/risk;
+- jangan menganggap penyebab death pasti jika unknown.
+
+Database unavailable/corrupt:
+- jangan melanjutkan tugas destruktif tanpa kemampuan persist/checkpoint yang diwajibkan;
+- gunakan emergency log lokal jika tersedia;
+- masuk safe degraded mode dan berikan diagnosis.
+
+======================================================================
+18. STRATEGI PENGUJIAN DAN KRITERIA PENERIMAAN
+======================================================================
+
+Tulis unit tests untuk:
+- config and secret validation;
+- manifest schema/path traversal/duplicate ID/dependency/version checks;
+- permission manager/action safety gate;
+- task state transitions/persistence/resume;
+- timeout/retry/circuit breaker;
+- LLM/VLM output schema rejection;
+- world observation freshness/unknown states;
+- learning episode and confidence/provenance;
+- Discord user authorization/argument validation;
+- event normalization dan failure classification.
+
+Integration tests dengan fake/mock adapter untuk:
+- seluruh core boot tanpa Discord token/Minecraft server/NIM key dalam offline test mode;
+- module valid ter-load, module invalid tidak mematikan core;
+- action cancellation mengakhiri task/loop;
+- gagal provider masuk degraded mode dan pulih setelah health check;
+- Discord offline tidak menghentikan runtime;
+- Minecraft reconnect tidak replay action tanpa revalidation;
+- bot death menghasilkan episode dengan unknown cause bila bukti kurang;
+- dua task yang bertentangan tidak menguasai movement bersamaan.
+
+Uji lapangan manual ketika credentials/server tersedia:
+1. Connect/spawn serta status Discord.
+2. `/sena status` menampilkan status yang nyata.
+3. Beri task sederhana dan verifikasi target menggunakan world state.
+4. Jalankan collectblock dengan inventory penuh dan tool tidak sesuai; pastikan kegagalan ditangani tanpa hang.
+5. Simulasikan/putuskan NIM dan pastikan fallback.
+6. Putuskan Discord dan pastikan bot tidak berhenti.
+7. Putuskan Minecraft dan pastikan task tidak terus mengirim aksi ketika bot offline.
+8. Uji pause/cancel/halt.
+9. Uji death event dengan test server sesuai aturan.
+10. Uji modul valid dan invalid dari folder modules.
+11. Uji VLM hanya jika ada screenshot source dan API key/model kompatibel.
+12. Uji pembangunan kecil di area yang diizinkan dengan tahap plan-build-verify-repair.
+
+Kriteria penerimaan MVP:
+- `npm install` dan build berhasil pada environment yang didokumentasikan.
+- Program dapat start dalam offline/test mode.
+- Mineflayer connector berjalan ketika config tersedia.
+- Discord dashboard/commands berfungsi ketika token tersedia; authorization dites.
+- Task queue persisten setelah restart.
+- Core tidak crash karena satu module/provider gagal.
+- Module loader memvalidasi module.json dan hanya menjalankan modul sesuai trust policy.
+- Plugin actions melalui coordinator dan dapat dibatalkan.
+- Ada provider interface LLM/VLM, status/fallback, schema validation, dan dokumentasi konfigurasi; NIM nyata diuji hanya jika access/key/model tersedia.
+- Learning menyimpan experience dan mengubah strategy retrieval/ranking setidaknya dalam loop yang sederhana dan teruji.
+- Ada docs, tests, compatibility audit, troubleshooting, serta honest status report.
+
+======================================================================
+19. URUTAN IMPLEMENTASI WAJIB (DARI NOL)
+======================================================================
+
+FASE 0 — AUDIT DAN BOOTSTRAP PLAN
+- Audit repository resmi/package metadata dan target environment.
+- Putuskan Node/package versions, module format, plugin compatibility, storage driver, config schema.
+- Buat docs/COMPATIBILITY.md dan decision notes.
+- Jangan mulai mengimplementasikan API yang belum diverifikasi.
+- Output fase: keputusan kompatibilitas + project plan singkat.
+
+FASE 1 — PROJECT FOUNDATION
+- Init package, TypeScript strict, ESM, scripts, lint/format/tests/build.
+- Config parsing/schema validation, .env.example, .gitignore, structured logger/redaction.
+- Bootstrap, graceful shutdown, health snapshot.
+- Offline/test mode.
+- Acceptance: install/typecheck/lint/test/build sukses tanpa external credentials.
+
+FASE 2 — CORE RUNTIME, EVENTS, PERSISTENCE, TASK QUEUE
+- Event bus, task/task state machine, repositories/schema migrations, runtime lifecycle.
+- Task persistence, cancellation, checkpoint, recoverable state.
+- Watchdog/timeouts/retry bounded.
+- Acceptance: unit/integration tests state transitions dan restart recovery lulus.
+
+FASE 3 — MODULE SYSTEM
+- Discovery, module.json schema, path security, semver/API compatibility, dependency resolution, permissions, module lifecycle, trust policy.
+- Basic module berisi hanya reflex capability.
+- Buat sample module komunitas yang kecil dan dites.
+- Acceptance: valid module loaded, invalid module isolated, duplicate/malicious path rejected.
+
+FASE 4 — MINEFLAYER ADAPTER DAN PLUGIN REGISTRY
+- Connection lifecycle, state/event normalization, plugin registry/dependency order.
+- Implementasikan module wrappers satu demi satu: pathfinder, collectblock, tool, PVP, armor, Hawkeye, projectile, auto-auth, death event berdasarkan audit aktual.
+- Jangan lanjut menandai module sebagai supported sebelum tests ada.
+- Acceptance: adapter tests dan minimal local-server smoke test jika tersedia.
+
+FASE 5 — ACTION COORDINATOR DAN WORLD MODEL
+- Serialisasi aksi konflik, cancellation, preconditions/postconditions, verification, resource budgets.
+- World state dengan freshness/unknown; progress/stuck detection.
+- Acceptance: tes tidak ada movement/controller overlap dan semua failure berhenti bounded.
+
+FASE 6 — LLM / NIM DAN PLANNER
+- Provider interfaces, NIM LLM provider, schema output, prompt/versioning, strategy lookup, task decomposition.
+- Local Ollama fallback opsional jika dipilih dan model endpoint diuji.
+- Rate limit/timeout/retry/circuit breaker.
+- Acceptance: mocked provider tests lulus dan remote test dijalankan jika key tersedia.
+
+FASE 7 — VLM
+- Vision manager/provider interface, image input/validation, NIM VLM sesuai dokumentasi terkini, structured observations, confidence/unknown state, cache/retention.
+- Hubungkan visual verification ke world model, bukan action langsung.
+- Acceptance: mocked VLM tests; remote test jika screenshot source + credential/model tersedia.
+
+FASE 8 — MEMORY DAN LEARNING
+- Episodic/semantic/procedural/spatial/task memory, experience collector, death analysis, strategy registry/evaluator, safe experiment policy.
+- Pastikan data learning benar-benar dipakai kembali oleh strategy retrieval.
+- Acceptance: test pengalaman sukses/gagal memengaruhi ranking strategi sesuai evidence dan confidence.
+
+FASE 9 — DISCORD DASHBOARD
+- Discord client, authorization, slash commands, dashboard embeds/buttons, notifications outbox, reconnect, command registration docs.
+- Tidak membuat web UI sebagai syarat.
+- Acceptance: mock interaction tests, unauthorized user denied, Discord offline tidak menghentikan core.
+
+FASE 10 — AUTONOMY, RECOVERY, END-TO-END
+- Goal loop, survival priorities, task selection, deterministic offline behaviors, recovery matrix, bounded retries, restart reconciliation.
+- Simulasi provider failures, death, disconnect, module crash, stuck path, DB error.
+- Acceptance: test suite lengkap + manual checklist yang ditandai lulus/gagal/belum diuji secara jujur.
+
+FASE 11 — DOKUMENTASI DAN RELEASE CANDIDATE
+- README quick start, setup/config, Discord setup, module development guide, security policy, troubleshooting, supported plugins/version matrix.
+- Pastikan lockfile dan .env.example tersedia; tidak ada secret atau data private di repo.
+- Final audit dependencies, scripts, logs, tests, graceful shutdown, default safety policy.
+
+Kerjakan tiap fase secara incremental. Jangan mengembangkan semua fitur sekali gus tanpa baseline yang lulus.
+
+======================================================================
+20. README DAN PENGALAMAN PENGGUNA YANG WAJIB DIBUAT
+======================================================================
+
+README harus mencakup:
+- apa itu Sena dan fitur yang memang sudah tersedia;
+- persyaratan Node/npm dan dukungan platform yang diuji;
+- instalasi dari project folder;
+- setup `.env` dari `.env.example` tanpa memasukkan secret ke source;
+- cara konfigurasi Minecraft server;
+- cara membuat Discord bot, mengaktifkan intents hanya yang benar-benar diperlukan, mengundang bot dengan permissions minimal, mendaftarkan slash commands;
+- cara memilih provider LLM/VLM dan melakukan health check;
+- menjalankan offline/test mode;
+- startup normal;
+- menambah modul melalui `modules/<folder>/module.json`;
+- trust policy untuk modul komunitas;
+- test/lint/typecheck/build;
+- logs, data directory, backup, shutdown, troubleshoot.
+
+Sediakan contoh konfigurasi dan perintah untuk Windows PowerShell serta Linux/macOS jika bisa dilakukan dengan dependency yang sama. Jangan mengklaim dukungan Android/Termux jika belum benar-benar diuji.
+
+======================================================================
+21. HAL YANG TIDAK BOLEH DILAKUKAN
+======================================================================
+
+- Jangan membuat dashboard web sebagai fokus awal; dashboard utama adalah Discord.
+- Jangan menjadikan Discord proses inti yang memiliki seluruh state/AI. Core tetap mandiri.
+- Jangan menjadikan LLM/VLM mandatory untuk setiap aksi.
+- Jangan memberi setiap module raw bot access atau izin penuh secara default.
+- Jangan menganggap semua VLM/NIM model menerima gambar.
+- Jangan menganggap `projectile` secara otomatis mendukung ender pearl tanpa menguji API/mekanisme.
+- Jangan menyimpulkan death cause tanpa evidence.
+- Jangan melakukan training/fine-tuning langsung pada model live berdasarkan satu kejadian.
+- Jangan menganggap schematic wajib untuk bangunan. Sena menyusun blueprint sementara dari functional specification.
+- Jangan menganggap gambar visual lebih akurat daripada block/world data untuk fakta koordinat.
+- Jangan melanjutkan aksi jika state dunia stale/unknown dan kesalahan dapat membahayakan bot atau merusak area.
+- Jangan mengirim seluruh chat Minecraft ke model tanpa policy, filtering, atau batasan privacy.
+- Jangan mengizinkan player chat menjadi perintah admin.
+- Jangan membuat retry/loop tidak terbatas.
+- Jangan menelan exception atau menampilkan sukses palsu.
+- Jangan mengubah/menghapus file user/repository lain.
+- Jangan menyatakan fitur telah berjalan jika hanya stub atau mock.
+
+======================================================================
+22. DEFINISI “BENAR-BENAR SELESAI” DAN LAPORAN AKHIR AGENT
+======================================================================
+
+Sebelum menyatakan proyek siap, periksa semuanya:
+[ ] Struktur project dan dependency lock lengkap.
+[ ] Install/build/lint/typecheck/test berjalan sesuai docs.
+[ ] Offline mode bisa boot tanpa external secret.
+[ ] Core lifecycle, task queue, persistence, watchdog dan shutdown diuji.
+[ ] Module loader memproses modules/<name>/module.json, validasi API/dependencies/permissions, dan mengisolasi kegagalan.
+[ ] Basic hanya menyediakan reflex sebagai capability dasar.
+[ ] Minecraft connection adapter dan plugin wrappers dibuat berdasarkan API yang telah diaudit.
+[ ] Action coordinator mencegah aksi konflik, timeout tak terbatas, dan loop tak berujung.
+[ ] LLM/VLM provider failure tidak menjatuhkan core.
+[ ] World model membedakan known/inferred/stale/unknown.
+[ ] Learning menyimpan pengalaman, mengevaluasi bukti, dan memengaruhi strategi berikutnya.
+[ ] Death event disimpan sebagai learning episode tanpa mengarang sebab kematian.
+[ ] Discord adalah dashboard utama, permissions diuji, dan disconnect tidak menghentikan Sena.
+[ ] Secret redaction, safe defaults, backup, migrations, retention dan .gitignore diperiksa.
+[ ] Dokumentasi instalasi, konfigurasi, module development, compatibility, recovery, dan testing lengkap.
+[ ] Semua fitur ditandai dengan status yang jujur: tested, partially tested, blocked, atau not tested.
+
+Laporan terakhir harus meliputi:
+1. Folder/file utama yang dibangun.
+2. Ringkasan arsitektur yang benar-benar diimplementasikan.
+3. Daftar perintah setup/start/test.
+4. Tes yang dijalankan dan hasil aktualnya.
+5. Plugin/package yang benar-benar kompatibel dan yang belum/ tidak kompatibel.
+6. Fitur yang membutuhkan key, server, akses, atau tindakan manual dari pemilik.
+7. Known limitations dan keputusan yang belum selesai.
+8. Tidak boleh menyebut “fully autonomous” atau “production-ready” tanpa bukti pengujian dan batasan yang jelas.
+
+AKHIR SPESIFIKASI
+
+Prioritas paling penting: bangun foundation yang benar, state/task persistence, Action Coordinator, system modul yang aman, serta mode degraded yang teruji. Setelah fondasi stabil, integrasikan plugin, NIM LLM/VLM, learning, dan dashboard Discord. Sena harus bisa pulih dan terus menjalankan tugas yang aman tanpa mengandalkan koneksi AI atau Discord yang selalu tersedia, sambil tetap jujur tentang hal yang tidak diketahuinya.

@@ -1,0 +1,13 @@
+{
+  "schema_version": "1.0",
+  "id": "basic",
+  "name": "Basic Reflex",
+  "version": "1.0.0",
+  "description": "Deterministic health assessment reflex capability.",
+  "entry": "index.js",
+  "api_version": "^1.0.0",
+  "capabilities": ["reflex-health-assessment"],
+  "dependencies": [],
+  "permissions": ["events.subscribe"],
+  "enabled_by_default": true
+}
