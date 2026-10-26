@@ -50,12 +50,7 @@ export class MinecraftAdapter {
       this.plugins,
       {
         onState: (state) => {
-          this.health.update({
-            minecraft: state,
-            ...(state === "spawned"
-              ? { mode: "OFFLINE_AI" as const }
-              : { mode: "DISCONNECTED_MINECRAFT" as const }),
-          });
+          this.health.update({ minecraft: state });
           this.events.emit("runtime.connection", {
             adapter: "minecraft",
             status: state,
@@ -145,24 +140,38 @@ export class MinecraftAdapter {
     }
     signal.throwIfAborted();
     bot.pathfinder.setMovements(this.movementPolicy(bot));
-    const navigation = bot.pathfinder.goto(
-      new goals.GoalNear(target.x, target.y, target.z, 1),
-    );
     let abortListener: (() => void) | undefined;
-    const aborted = new Promise<never>((_, reject) => {
-      abortListener = () =>
-        reject(
-          signal.reason instanceof Error
-            ? signal.reason
-            : new Error("movement-cancelled"),
-        );
-      signal.addEventListener("abort", abortListener, { once: true });
-    });
+    let completed = false;
+    let navigationError: unknown;
     try {
+      const navigation = bot.pathfinder.goto(
+        new goals.GoalNear(target.x, target.y, target.z, 1),
+      );
+      const aborted = new Promise<never>((_, reject) => {
+        abortListener = () =>
+          reject(
+            signal.reason instanceof Error
+              ? signal.reason
+              : new Error("movement-cancelled"),
+          );
+        signal.addEventListener("abort", abortListener, { once: true });
+        if (signal.aborted) abortListener();
+      });
       await Promise.race([navigation, aborted]);
+      completed = true;
+    } catch (error) {
+      navigationError = error;
+      throw error;
     } finally {
       if (abortListener) signal.removeEventListener("abort", abortListener);
-      if (signal.aborted) bot.pathfinder.stop();
+      if (!completed) {
+        try {
+          bot.pathfinder.stop();
+        } catch (cleanupError) {
+          // The coordinator's cleanup retries stop and safe-halts if it still fails.
+          if (navigationError === undefined) throw cleanupError;
+        }
+      }
     }
   }
 

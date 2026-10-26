@@ -3,6 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { discoverModules } from "../src/core/modules/discovery.js";
+import { ModuleHost } from "../src/core/modules/module-host.js";
+import { SenaEventBus } from "../src/core/event-bus.js";
+import { logger } from "../src/core/logger.js";
 import { supportsApiVersion } from "../src/core/modules/manifest.js";
 
 const roots: string[] = [];
@@ -53,10 +56,12 @@ describe("module discovery and trust", () => {
   it("orders trusted modules and leaves community modules untrusted", async () => {
     const root = await createRoot();
     await addModule(root, "base", manifest("base"));
+    const marker = "__sena_untrusted_module_was_imported__";
     await addModule(
       root,
       "extension",
       manifest("extension", { dependencies: ["base"] }),
+      `globalThis.${marker} = true; export default { start() {} };\n`,
     );
     const result = await discoverModules({
       modulesDirectory: root,
@@ -68,6 +73,12 @@ describe("module discovery and trust", () => {
     expect(
       result.modules.find((record) => record.manifest?.id === "extension"),
     ).toMatchObject({ status: "untrusted", trusted: false });
+    const host = new ModuleHost(new SenaEventBus(), logger, {
+      mode: "offline",
+    });
+    await host.start(result.loadOrder);
+    expect((globalThis as Record<string, unknown>)[marker]).toBeUndefined();
+    await host.stopAll();
   });
 
   it("rejects entry traversal and isolates invalid module folders", async () => {

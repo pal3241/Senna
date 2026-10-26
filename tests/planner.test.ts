@@ -38,6 +38,36 @@ describe("AI planning boundary", () => {
     ).resolves.toEqual(plan);
   });
 
+  it("reports provider availability only after a successful or failed request", async () => {
+    const statuses: string[] = [];
+    const context = {
+      goal: "Explore",
+      knownFacts: [],
+      availableCapabilities: ["world.observe"],
+    };
+    const working = new Planner(
+      new FakeProvider(JSON.stringify(plan)),
+      (status) => {
+        statuses.push(status);
+      },
+    );
+    await working.propose(context);
+    expect(statuses).toEqual(["available"]);
+
+    const failedProvider: LlmProvider = {
+      complete: async () => {
+        throw new Error("provider-unavailable");
+      },
+    };
+    const unavailable = new Planner(failedProvider, (status) => {
+      statuses.push(status);
+    });
+    await expect(unavailable.propose(context)).rejects.toThrow(
+      "provider-unavailable",
+    );
+    expect(statuses).toEqual(["available", "unavailable"]);
+  });
+
   it("rejects invented or unregistered capabilities", async () => {
     const planner = new Planner(
       new FakeProvider(

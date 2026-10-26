@@ -37,11 +37,34 @@ export class Health {
   update(
     patch: Partial<Omit<HealthSnapshot, "updatedAt">>,
   ): Readonly<HealthSnapshot> {
+    const shouldDeriveMode =
+      patch.mode === undefined &&
+      (patch.minecraft !== undefined || patch.llm !== undefined) &&
+      this.snapshot.mode !== "SAFE_HALT";
     this.snapshot = {
       ...this.snapshot,
       ...patch,
+      ...(shouldDeriveMode
+        ? { mode: deriveRuntimeMode({ ...this.snapshot, ...patch }) }
+        : {}),
       updatedAt: new Date().toISOString(),
     };
     return this.get();
   }
+
+  refreshMode(): Readonly<HealthSnapshot> {
+    this.snapshot = {
+      ...this.snapshot,
+      mode: deriveRuntimeMode(this.snapshot),
+      updatedAt: new Date().toISOString(),
+    };
+    return this.get();
+  }
+}
+
+export function deriveRuntimeMode(snapshot: HealthSnapshot): RuntimeMode {
+  if (snapshot.minecraft === "disabled" && snapshot.llm !== "available")
+    return "OFFLINE_AI";
+  if (snapshot.minecraft !== "spawned") return "DISCONNECTED_MINECRAFT";
+  return snapshot.llm === "available" ? "NORMAL" : "DEGRADED_NO_LLM";
 }

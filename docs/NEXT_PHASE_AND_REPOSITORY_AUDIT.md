@@ -5,6 +5,8 @@ Repository: `pal3241/Senna`
 Target branch: `main`  
 Purpose: replace the previous gameplay-execution phase note with an evidence-based audit and the next implementation plan.
 
+Implementation status: execution hardening implemented and fake-tested; resource collection audited and blocked pending a safer cancellation/movement contract; live Minecraft smoke test not tested.
+
 ## 1. Current verified scope
 
 The current repository is a safety-first TypeScript/Mineflayer runtime with a Discord control plane. The README and source currently describe or implement:
@@ -16,7 +18,7 @@ The current repository is a safety-first TypeScript/Mineflayer runtime with a Di
 - movement safety settings that disable digging, parkour, towers, sprinting, scaffolding, and drops greater than one block;
 - a Discord slash-command adapter and an NVIDIA NIM planning client with validated output.
 
-The documented quality gate is `npm run check`. The previous phase report records 42 tests across 12 files passing at that point, but this audit did not execute the test suite. Live Minecraft navigation, live Discord login/command sync, and live NVIDIA API requests remain unverified. Do not treat fake-based tests as live integration tests.
+The documented quality gate is `npm run check`. The previous phase report recorded 42 tests across 12 files passing; this phase adds regression coverage for the findings below. Live Minecraft navigation, live Discord login/command sync, and live NVIDIA API requests remain unverified. Do not treat fake-based tests as live integration tests.
 
 ## 2. Problems and risks found in source/documentation review
 
@@ -29,6 +31,7 @@ File: `src/adapters/minecraft/minecraft-adapter.ts`
 The `moveTo()` method races the pathfinder's `goto()` promise against cancellation. Its `finally` block calls `pathfinder.stop()` only when the abort signal is set. If `goto()` rejects due to a pathfinding/plugin error while the signal is not aborted, the adapter does not explicitly stop pathfinding. This can leave the underlying movement behavior running after the task has failed.
 
 Required repair:
+
 - stop pathfinder on cancellation and on any unsuccessful navigation exit;
 - preserve the original error and do not convert failure to success;
 - avoid stopping a later action's pathfinder run accidentally; keep the shared action lane and ownership assumptions explicit;
@@ -42,6 +45,7 @@ File: `src/adapters/minecraft/world-observer.ts`
 When the player's position cannot be normalized, the observer substitutes `{ x: 0, y: 0, z: 0 }` for distance calculations. Entities can then be reported as nearby based on distance from the world origin, even though the player's location is unknown.
 
 Required repair:
+
 - if player position is unknown, do not calculate entity distances from a fabricated origin;
 - return entities as unknown/empty-with-explicit-status according to the existing fact contract, rather than implying a reliable nearby list;
 - add a test with a missing/non-finite player position and entity positions far from the origin.
@@ -53,6 +57,7 @@ File: `src/execution/action-coordinator.ts`
 The public success result type represents only `status: "succeeded"`; failures are propagated through rejected promises and typed error classes. This can work, but every caller must normalize exceptions into persisted task states and operator-visible reason codes. Verify that cancellation, timeout, adapter errors, and postcondition failures all result in a non-success persisted task state and release the action lane/resources.
 
 Required repair:
+
 - audit the task/action boundary and document one stable mapping from coordinator errors to persisted task outcomes/reason codes;
 - add or extend tests for each failure mapping and ensure the next queued action can run after cleanup;
 - do not replace thrown errors with success-shaped values.
@@ -64,6 +69,7 @@ Files: `README.md`, `docs/COMPATIBILITY.md`, `src/adapters/minecraft/plugin-regi
 The only registered gameplay plugin is `mineflayer-pathfinder`. `mineflayer-collectblock`, `mineflayer-tool`, combat, armor, projectile, and auto-auth integrations are not installed and are explicitly deferred. The currently documented goal is bounded movement; block collection and survival progression are not implemented.
 
 Required repair:
+
 - audit candidate collection/tool packages before adding them;
 - record package/version, API, license, maintenance, peer compatibility, safety implications, and source links in `docs/COMPATIBILITY.md`;
 - install no package until the audit supports the choice;
@@ -76,6 +82,7 @@ Files: `docs/COMPATIBILITY.md`, `README.md`
 Fakes cover deterministic code paths, but live Mineflayer navigation, server-specific behavior, Discord authentication/command sync, and NVIDIA credentials/API calls are not tested. Server version, permissions, anti-cheat, terrain, and login mode can affect real behavior.
 
 Required repair:
+
 - add an opt-in smoke-test procedure with explicit prerequisites and a disposable/test server recommendation;
 - label each result `passed`, `failed`, or `not tested`; never infer live success from unit tests;
 - keep CI and offline startup independent of credentials and an always-on Minecraft server.
@@ -87,6 +94,7 @@ File: `src/adapters/minecraft/world-observer.ts`
 The observer bounds nearby entities and requested block positions, and represents unavailable facts as unknown. However, the fabricated player-origin fallback above can undermine that uncertainty contract. Tests should also ensure malformed requested coordinates, unloaded blocks, stale disconnected snapshots, and entity-count bounds cannot be mistaken for authoritative world facts.
 
 Required repair:
+
 - define and test exact semantics for unknown, stale, and known facts;
 - reject or mark invalid coordinates instead of querying arbitrary positions;
 - preserve original observation timestamps when a fact becomes stale;
@@ -99,6 +107,7 @@ File: `src/adapters/minecraft/minecraft-adapter.ts`
 The Minecraft connection callback sets runtime mode to `OFFLINE_AI` whenever the Minecraft connection spawns, even though LLM availability is tracked independently in `HealthSnapshot.llm`. This can make health reporting claim AI is offline based only on a Minecraft state transition.
 
 Required repair:
+
 - make runtime mode reflect provider and connection health together;
 - prevent the Minecraft adapter from overwriting unrelated health dimensions;
 - add tests for spawned + LLM available, spawned + LLM unavailable, and disconnected Minecraft.
@@ -110,6 +119,7 @@ File: `src/execution/task-execution-service.ts`
 The generic error path persists `actionStopped: true` and `resourceReleased: true` for any thrown action error. A failed cleanup callback or adapter-level failure can make these claims inaccurate.
 
 Required repair:
+
 - persist cleanup state only when the coordinator/adapter reports it;
 - otherwise use an explicit unknown/failed value and preserve the reason code;
 - test cleanup failure and ensure it cannot produce a success-shaped task result.
@@ -121,6 +131,7 @@ File: `src/execution/action-coordinator.ts`
 The timeout handler aborts the action controller with an `ActionTimeoutError`, but the catch path chooses cleanup reason `cancelled` whenever the controller is aborted. This loses the distinction between a timeout and an operator/task cancellation.
 
 Required repair:
+
 - preserve the original terminal cause through cleanup and task reporting;
 - distinguish timeout from cancellation in logs, reason codes, and tests;
 - prove timeout still stops movement and permits the next queued action after cleanup.
@@ -132,15 +143,25 @@ File: `docs/MODULES.md`
 The documentation correctly says trusted modules execute with Node.js process privileges and there is no process sandbox. Exact-ID trust is a useful gate, not isolation.
 
 Required follow-up:
+
 - keep untrusted modules undiscoverable to execution and test that they are never imported;
 - do not grant raw Mineflayer bot access to modules;
 - defer third-party module execution in an untrusted process until a real isolation design exists.
+
+## 2.1 Implementation results
+
+- Pathfinder `goto()` rejection and cancellation now stop the pathfinder while the shared action lane still owns movement. The original navigation error is preserved. The coordinator distinguishes timeout cleanup from cancellation and releases the action lane before rejecting to callers.
+- The task/action boundary persists stable reason codes: timeout → `action-timeout`, verification failure → `postcondition-unverified`, precondition failure → `precondition-failed`, and other plugin/adapter exceptions → `action-failed`. Explicit owner cancellation becomes `cancelled`; disconnects are `blocked` with `minecraft-disconnected`. Cleanup and movement-release claims are persisted only from coordinator cleanup evidence; the lane-release fact is tracked separately.
+- Entity distance is unknown when player position is invalid. Explicit block requests are limited to 32 positions and Minecraft coordinate bounds; invalid or oversized requests are not queried. Bounded entity/inventory facts expose when the list was truncated, and stale facts retain their original observation timestamps.
+- Runtime mode now combines Minecraft and LLM health. Minecraft state updates no longer overwrite LLM state; an LLM request updates availability, while SAFE_HALT persists until explicit resume.
+- Untrusted module loading is regression-tested through `ModuleHost`, not only by checking discovery status.
+- Collection remains disabled after compatibility review. No collection dependencies were installed; details and evidence are recorded in `docs/COMPATIBILITY.md`.
 
 ## 3. Next implementation phase
 
 ### Phase title: Execution Hardening and Bounded Resource Collection
 
-Do this phase in order. Do not begin combat, VLM, learning, generative building, or broad autonomous goal selection before this phase is verified.
+The hardening work below is implemented. Collection remains blocked by Step C's safety audit, so Step D is intentionally not implemented. Do not begin combat, VLM, learning, generative building, or broad autonomous goal selection before collection has a safe cancellation and movement-policy contract.
 
 #### Step A — Fix and test movement failure cleanup
 
@@ -191,6 +212,7 @@ npm run check
 ```
 
 Add focused tests for:
+
 - pathfinder rejection and cleanup;
 - cancellation and timeout during movement/collection;
 - malformed arguments and out-of-range targets;
@@ -214,20 +236,41 @@ If a Minecraft test server is available, run a separately labelled manual/integr
 
 ## 5. Definition of done
 
-- [ ] Pathfinder rejection always triggers safe cleanup and has a regression test.
-- [ ] Invalid player position never produces fabricated entity distances.
-- [ ] Requested block coordinates and all action arguments are validated.
-- [ ] Collection/tool integration is either audited and tested or explicitly blocked with evidence.
-- [ ] If implemented, `collect_block` uses the shared coordinator and verifies its postcondition.
-- [ ] Cancellation, timeout, disconnect, plugin errors, and restart recovery never produce false completion.
-- [ ] `npm run check` passes; report the actual output/results.
-- [ ] Live integration results are distinguished from fake/unit tests.
-- [ ] README, compatibility audit, and this phase report agree about actual capabilities.
-- [ ] No credentials, private server details, or secrets are committed.
+- [x] Pathfinder rejection always triggers safe cleanup and has a regression test.
+- [x] Invalid player position never produces fabricated entity distances.
+- [x] Requested block coordinates and movement action arguments are validated.
+- [x] Collection/tool integration was audited and is explicitly blocked with evidence; no dependency was installed.
+- [ ] `collect_block` is not implemented because the released plugin does not meet current movement-safety/cancellation requirements.
+- [x] Cancellation, timeout, disconnect, plugin errors, and restart recovery do not produce false completion in the tested task path.
+- [x] `npm run check` passed: formatting, typecheck, lint, 51 tests across 13 files, and production build.
+- [x] Live integration results are distinguished from fake/unit tests; live Minecraft smoke test is `not tested`.
+- [x] README, compatibility audit, testing guide, and this phase report describe the same supported scope.
+- [x] No credentials, private server details, or secrets were added.
+
+### Stable task failure mapping
+
+| Coordinator/adapter condition | Persisted task status | Reason code                               |
+| ----------------------------- | --------------------- | ----------------------------------------- |
+| Verified movement             | `succeeded`           | No error; verified checkpoint stored      |
+| Pathfinding timeout           | `blocked`             | `action-timeout`                          |
+| Postcondition not observed    | `blocked`             | `postcondition-unverified`                |
+| Action precondition not met   | `blocked`             | `precondition-failed`                     |
+| Adapter/plugin exception      | `blocked`             | `action-failed`                           |
+| Minecraft disconnect          | `blocked`             | `minecraft-disconnected`                  |
+| Explicit owner cancellation   | `cancelled`           | Cancellation event; no success checkpoint |
+
+### Completion report
+
+Implemented the P0/P1/P2 correctness repairs described above and added focused tests. The package audit found a version mismatch between npm-published releases and repository heads: npm publishes collectblock 1.6.0 and tool 1.2.0, while current repository metadata advertises unreleased 1.7.0 and 1.3.0. Both are MIT; their declared Mineflayer/Pathfinder ranges include the locked versions, but neither declares a Node engine. Collectblock's released source overrides two movement safety flags and its cancel operation stops pathfinding without proving an active `bot.dig()` has ceased; it is therefore not installed or exposed.
+
+Verification: `LD_LIBRARY_PATH=/data/data/com.termux/files/usr/lib npm run check` passed on 2026-10-26: Prettier formatting, TypeScript typecheck, ESLint, all 51 tests across 13 files, and production build.
+
+The implementation is tested with fakes only. No live Minecraft server, Discord account, or NVIDIA credentials were used. The next smallest task is to define or upstream a collection cancellation contract that interrupts/awaits digging and preserves caller-supplied safe movement settings; only then should the exact released plugin be integrated and a disposable-server smoke test run.
 
 ## 6. Required completion report from the coding agent
 
 Report:
+
 1. findings fixed and any findings left open;
 2. files changed;
 3. package compatibility evidence and links, if a dependency was added;
