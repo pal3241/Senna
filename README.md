@@ -4,7 +4,12 @@ Sena is a safety-first Minecraft Java agent with an optional Discord control pla
 
 ## Current status
 
-The current runtime includes strict configuration, redacted logging, persistent tasks and alerts, restart reconciliation, trusted module loading, a Mineflayer connector with pathfinder, bounded freshness-aware world observations, a single-lane action coordinator, and an authorized Discord slash-command adapter. One deterministic gameplay path is implemented end-to-end: an authorized task using `move_to <x> <y> <z>` is persisted, range-checked, navigated with conservative pathfinder settings, and completed only after a fresh position observation verifies arrival. Unsupported goals are blocked; arbitrary LLM-generated goals are not executed. Automated tests use fakes; live Minecraft, Discord, and NVIDIA connections have not been tested. Resource collection remains disabled until its cancellation and movement-safety contract can be guaranteed. See `docs/PHASE_NEXT_GAMEPLAY_EXECUTION.md` for the next phase and `docs/COMPATIBILITY.md` for integration status.
+The current runtime includes strict configuration, redacted logging, persistent tasks and alerts, restart reconciliation, trusted module loading, a Mineflayer connector with pathfinder, bounded freshness-aware world observations, a single-lane action coordinator, and an authorized Discord slash-command adapter. One deterministic gameplay path is implemented end-to-end: an authorized task using `move_to <x> <y> <z>` is persisted, range-checked, navigated with conservative pathfinder settings, and completed only after a fresh position observation verifies arrival. Unsupported goals are blocked; arbitrary LLM-generated goals are not executed. Automated tests use fakes; live Minecraft, Discord, and NVIDIA connections have not been tested. Resource collection remains disabled until its cancellation and movement-safety contract can be guaranteed.
+
+See:
+- `docs/PHASE_NEXT_GAMEPLAY_EXECUTION.md` for the next implementation phase.
+- `docs/ANDY_4_2_MICRO_GAMEPLAY_INTEGRATION.md` for the proposed local gameplay-brain integration, reflex-first architecture, and test plan.
+- `docs/COMPATIBILITY.md` for integration status and audited choices.
 
 ## Requirements and commands
 
@@ -17,5 +22,4 @@ npm run dev
 
 The default `SENA_MODE=offline` path does not require game, Discord, or provider credentials. Never commit `.env`.
 
-See `docs/COMPATIBILITY.md` for audited choices and unverified integrations.
 Community modules remain untrusted unless their exact IDs are configured in `SENA_TRUSTED_MODULE_IDS`; see `docs/MODULES.md` before enabling module code.
